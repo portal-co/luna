@@ -1,9 +1,11 @@
-export type LuaKey = `lua$${string}`;
+export type LuaKey<T extends string = string> = `lua$${T}`;
+export declare function luaKey<T extends string = string>(value: T): LuaKey<T>;
 export interface LuaTableContents {
     [a: LuaKey | number]: LuaObject;
 }
 export declare class LuaTable {
     #private;
+    static getMeta(k: any): [LuaObject] | undefined;
     constructor(contents: LuaTableContents);
     get contents(): LuaTableContents;
 }
