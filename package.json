@@ -1,0 +1,8 @@
+{
+  "name": "@portal-solutions/luna",
+  "workspaces": [],
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "zshy": "^0.4.4"
+  }
+}

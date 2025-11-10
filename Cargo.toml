@@ -1,0 +1,10 @@
+[workspace]
+members=[]
+resolver="3"
+
+[workspace.package]
+license = "MPL-2.0"
+description = "Lua to JS compiler"
+
+[workspace.dependencies]
+full_moon = "2.0.0"
