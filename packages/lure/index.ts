@@ -7,11 +7,35 @@ export interface LuaTableContents {
 }
 export class LuaTable {
   readonly #contents: LuaTableContents;
-  static readonly #metas: WeakMap<WeakKey, LuaObject> = new WeakMap();
-  static getMeta(k: any): [LuaObject] | undefined {
+  #_metatable: LuaObject = null;
+  #didInitMetatable: boolean = false;
+  #initMetatable() {
+    if (!this.#didInitMetatable)
+      LuaTable.#metas.set(this, {
+        get value() {
+          return this.#_metatable;
+        },
+        set value(v) {
+          this.#_metatable = v;
+        },
+      });
+    this.#didInitMetatable = true;
+  }
+  get metatable() {
+    return this.#_metatable;
+  }
+  set metatable(v) {
+    if (this.#_metatable !== v) {
+      this.#initMetatable();
+      this.#_metatable = v;
+    }
+  }
+  static readonly #metas: WeakMap<WeakKey, { value: LuaObject }> =
+    new WeakMap();
+  static getMeta(k: any): { value: LuaObject } | undefined {
     while (k !== undefined) {
       if (typeof k in { symbol: true, object: true })
-        if (LuaTable.#metas.has(k)) return [LuaTable.#metas.get(k)!];
+        if (LuaTable.#metas.has(k)) return LuaTable.#metas.get(k)!;
       k = Object.getPrototypeOf(k);
     }
     return;

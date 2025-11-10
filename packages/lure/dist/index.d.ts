@@ -5,7 +5,11 @@ export interface LuaTableContents {
 }
 export declare class LuaTable {
     #private;
-    static getMeta(k: any): [LuaObject] | undefined;
+    get metatable(): LuaObject;
+    set metatable(v: LuaObject);
+    static getMeta(k: any): {
+        value: LuaObject;
+    } | undefined;
     constructor(contents: LuaTableContents);
     get contents(): LuaTableContents;
 }
