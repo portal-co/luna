@@ -8,3 +8,17 @@ description = "Lua to JS compiler"
 
 [workspace.dependencies]
 full_moon = "2.0.0"
+
+swc_atoms = "^8.0.0"
+swc_common = "^16.0.0"
+swc_ecma_ast = "^17.0.0"
+swc_ecma_compat_es2015 = "^32.0.0"
+swc_ecma_minifier = "^35.0.0"
+swc_ecma_transforms_base = "^29.0.0"
+swc_ecma_transforms_optimization = "^31.0.0"
+swc_ecma_utils = "^23.0.0"
+swc_ecma_visit = "^17.0.0"
+swc_bundler = "^34.0.0"
+swc_ecma_loader = "^16.0.0"
+swc_ecma_parser = "^26.0.0"
+swc_ecma_codegen = "^19"
