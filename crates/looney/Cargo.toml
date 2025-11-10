@@ -1,0 +1,14 @@
+[package]
+name = "looney"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description.workspace = true
+
+[dependencies]
+full_moon.workspace = true
+swc_atoms.workspace = true
+swc_common.workspace = true
+swc_ecma_ast.workspace = true
+swc_ecma_utils.workspace = true
+swc_ecma_visit.workspace = true

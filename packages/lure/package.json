@@ -1,0 +1,20 @@
+{
+  "name": "@portal-solutioms/luna-lure",
+  "type": "module",
+  "zshy": "index.ts",
+  "license": "MPL-2.0",
+  "description": "Lua to JS compiler",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.cts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  }
+}
