@@ -629,7 +629,7 @@ checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
 [[package]]
 name = "portal-solutions-swibb"
 version = "0.5.0"
-source = "git+https://github.com/portal-co/swibb.git?branch=main#0dfe26ff428cd2d7af87eafd495d5f4082b97785"
+source = "git+https://github.com/portal-co/swibb.git?branch=main#8cba5664d5b3029ad9a9f4ad984d5613b480dc6c"
 dependencies = [
  "impl-trait-for-tuples",
  "swc_atoms",
