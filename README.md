@@ -1,13 +1,13 @@
 # @portal-solutions/luna
 
 ## Description
-Project luna
+A TypeScript workspace containing "lure", likely a UI or utility package.
 
 ## Goals
-- [ ] Add project goals
+- [ ] TBD
 
 ## Progress
-- [ ] Initial setup
+- [ ] Workspace setup
 
 ---
 *AI assisted*
