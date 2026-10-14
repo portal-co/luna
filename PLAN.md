@@ -290,13 +290,28 @@ Shipped via `include_str!` and prepended to js2lua output unless `--no-runtime`.
   wrong `this` (`#_metatable` access would throw), and `getMeta` walked past
   `null` prototypes.
 
-### Phase 2 — Control flow & functions
-- [ ] `if/elseif/else`, `while`, numeric `for` ↔ `for(;;)` (incl. step, inclusive
+### Phase 2 — Control flow & functions ✅
+- [x] `if/elseif/else`, `while`, numeric `for` ↔ `for(;;)` (incl. step, inclusive
   bounds, loop-var capture semantics), `break`.
-- [ ] Function decl/expr, params, `return` (single value), recursion, closures,
+- [x] Function decl/expr, params, `return` (single value), recursion, closures,
   mutated upvalues.
 - Done when: fib (recursive + iterative), fizzbuzz, closure-counter, loop-capture
   cases pass both directions; golden files reviewed.
+- Landed (2026-10-14): 17 tests green, 12 l2j + 14 j2l corpus cases.
+- Scope/semantic decisions (beyond plan):
+  - JS classic `for` accepted only in the numeric-for shape (`let i = e1; i <=
+    e2; i++/i += e3` and mirrors), matched by `Id` — richer loops are Phase 5.
+  - `i++`/`i += e` accepted as statements (desugared), rejected as expressions.
+  - JS fn declarations lowered as hoisted `local f` + `f = function...`; Lua
+    `local function f` → `const f = function f()` (named fn expr, no hoisting
+    analysis); mutual recursion resolves at call time both ways.
+  - Param normalization: missing args → nil/undefined sentinels; fallthrough
+    return is `null` (Lua) / `jsUndefined` (JS).
+  - Numeric-for desugars limit/step into `$`-temps computed once (unforgeable
+    from Lua source, so no collisions); per-iteration `let` freshness gives
+    Lua's closure capture semantics for free.
+  - Harness runs compiled JS in CJS sloppy mode (classic-script semantics:
+    chunk `return` legal, implicit globals work).
 
 ### Phase 3 — Tables/objects & calls
 - [ ] Table/object literals (array + record + mixed), indexing (incl. string keys,
@@ -366,3 +381,7 @@ Shipped via `include_str!` and prepended to js2lua output unless `--no-runtime`.
   so name mangling only touches locals, never runtime globals;
   (d) `docs/SUBSET.md` gained the authoritative coercion tables (§5) — treat
   it, not this plan, as the semantic source of truth going forward.
+- 2026-10-14: Phase 2 landed. Deviations: ternary moved forward from Phase 3
+  (needed for JS parity); `function name()` global-fn sugar included; harness
+  switched from ESM+IIFE to CJS sloppy-mode execution so chunk-level `return`
+  and global assignment both behave like Lua chunks.

@@ -160,6 +160,11 @@ function jsOr(a, b)
   if jsTruthy(av) then return av else return b() end
 end
 
+-- Ternary: JS `c ? a : b`. Branches are thunks so only the taken one runs.
+function jsCond(c, a, b)
+  if jsTruthy(c) then return a() else return b() end
+end
+
 -- Minimal property access (plain-table objects; prototype machinery is
 -- Phase 3/5). Missing keys read as `undefined`, never nil.
 function jsGet(t, k)

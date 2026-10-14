@@ -51,10 +51,10 @@ Status legend: **[v0]** implemented now; **[P2]–[P6]** scheduled (PLAN.md);
 | call statement       | `f(...)`                  | `f(...);`                   | [v0]   |
 | block                | `do ... end`              | `{ ... }`                   | [v0]   |
 | return (chunk/fn)    | `return e` (≤ 1 value)    | `return e;` (in fns)        | [v0]*  |
-| if/elseif/else       | `if .. elseif .. else`    | `if .. else if .. else`     | [P2]   |
-| loops                | `while`, numeric `for`    | `while`, classic `for(;;)`  | [P2]   |
-| break                | `break`                   | `break;`                    | [P2]   |
-| ternary              | —                         | `c ? a : b`                 | [P2]   |
+| if/elseif/else       | `if .. elseif .. else`    | `if .. else if .. else`     | [v0]   |
+| loops                | `while`, numeric `for`    | `while`, classic `for(;;)`* | [v0]   |
+| break                | `break`                   | `break;` (no labels)        | [v0]   |
+| ternary              | —                         | `c ? a : b`                 | [v0]   |
 | multiple assignment  | `a, b = b, a`             | (temporaries)               | [P4]   |
 | generic iteration    | `for k,v in ...`          | `for..of`                   | [P5]   |
 | errors               | `error`/`pcall`           | `throw`/`try`               | [P5]   |
@@ -64,7 +64,14 @@ Status legend: **[v0]** implemented now; **[P2]–[P6]** scheduled (PLAN.md);
 | destructuring        | —                         | —                           | [X]    |
 
 \* lua2js output is a classic script so chunk-level `return` is legal; js2lua
-rejects top-level `return` (JS has none) and accepts it in functions [P2].
+rejects top-level `return` (JS has none) and accepts it in functions.
+
+\* Classic `for` is accepted only in the numeric-for shape
+`for (let i = e1; i <= e2; i++/i += e3)` (and the `>=`/`-=` mirror). The loop
+variable is matched by binding identity, not name text. Limit and step are
+evaluated once (Lua semantics); the loop variable is immutable in the body
+and fresh per iteration, so closures capture per-iteration values in *both*
+languages (JS `let` in the for-init matches Lua exactly).
 
 Statements are sequenced; block scoping of `local`/`let` is the same shape in
 both languages, and shadowing resolves identically.
@@ -82,7 +89,7 @@ both languages, and shadowing resolves identically.
 | vararg/spread     | `...`      | `...rest`      | [P4]                                       |
 | index             | `t[k]`, `t.k` | `t[k]`, `t.k` | [P3]                                       |
 | constructors      | `{...}`    | `{...}`, `[...]` | [P3]                                     |
-| functions         | [P2]       | [P2]           |                                            |
+| functions         | [v0]*      | [v0]*          | fixed params, closures, recursion          |
 | bitwise ops       | —          | —              | [X] v0                                     |
 | loose eq (`==`)   | n/a        | —              | [X] (use `===`)                            |
 | `??`, `in`, `instanceof`, `,` | — | —      | [X]                                        |
@@ -91,6 +98,23 @@ both languages, and shadowing resolves identically.
 **Precedence note:** emitters never rely on source-language precedence to
 preserve semantics: all non-atom operands of emitted raw operators are
 parenthesized, and everything semantic goes through helper calls anyway.
+
+**Functions:** named and anonymous forms, fixed parameters (varargs/rest are
+[P4]), closures over upvalues (direct mapping both ways), recursion.
+- Lua `local function f` → JS `const f = function f(...)` (named function
+  expression: recursion without hoisting analysis; mutual recursion resolves
+  at call time).
+- Lua `function f` (no `local`) → assignment to an existing local or a global.
+- JS `function f` declarations are *hoisted*: lowered to `local f` +
+  `f = function...` at the top of their block, so calls before the
+  declaration line work.
+- Call arity: missing arguments pad with `nil`/`undefined` (function
+  prologues normalize), extra arguments are dropped.
+- Fallthrough return: Lua → `null` (nil); JS → the `undefined` sentinel.
+  `return;` with no value follows the same mapping.
+- Divergence (documented): reading a `let` binding before its declaration
+  line is a JS TDZ error; compiled output reads the local and gets `nil`
+  instead. The corpus avoids it.
 
 ## 5. Operator semantics (the coercion matrix)
 

@@ -93,6 +93,16 @@ export function luaOr(a: () => LuaObject, b: () => LuaObject): LuaObject {
   return luaTruthy(av) ? av : b();
 }
 
+// Conditional expression (`c and a or b` lowering / ternary): branches are
+// thunks so only the taken one runs.
+export function luaCond(
+  c: LuaObject,
+  a: () => LuaObject,
+  b: () => LuaObject,
+): LuaObject {
+  return luaTruthy(c) ? a() : b();
+}
+
 // ---------------------------------------------------------------------------
 // Coercions
 // ---------------------------------------------------------------------------

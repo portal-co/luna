@@ -65,7 +65,25 @@ fn quote_lua_string(value: &str) -> String {
     out
 }
 
-fn emit_expr(expr: &IrExpr, out: &mut String) {
+/// Atomic for the purposes of a call/function position: no parens needed.
+fn is_atom(expr: &IrExpr) -> bool {
+    matches!(
+        expr,
+        IrExpr::Nil
+            | IrExpr::Bool(_)
+            | IrExpr::Num(_)
+            | IrExpr::Str(_)
+            | IrExpr::Var(_)
+            | IrExpr::Call { .. }
+            | IrExpr::Function { .. } // multi-line, self-contained
+    )
+}
+
+/// `at_line_start` must be true when emitting at the beginning of a logical
+/// line (after indentation): a parenthesized expression there would be parsed
+/// as a continuation of the previous line's call, so we use `do ... end`
+/// expression-wrapping instead (only reachable for multi-line function exprs).
+fn emit_expr_ctx(expr: &IrExpr, indent: usize, at_line_start: bool, out: &mut String) {
     match expr {
         IrExpr::Nil => out.push_str("nil"),
         IrExpr::Bool(true) => out.push_str("true"),
@@ -75,50 +93,58 @@ fn emit_expr(expr: &IrExpr, out: &mut String) {
         IrExpr::Var(name) => out.push_str(name),
         IrExpr::Call { func, args, .. } => {
             match &**func {
-                IrExpr::Var(_) | IrExpr::Call { .. } => emit_expr(func, out),
-                // A non-atom callee (e.g. a helper-call result of a binop) is
-                // still callable; parenthesize to keep Lua's grammar happy.
+                IrExpr::Function { .. } if at_line_start => {
+                    // `(function ... end)(...)` at line start would chain off
+                    // the previous statement — wrap with a do-block instead.
+                    out.push_str("(function()\n");
+                    out.push_str(&"  ".repeat(indent + 1));
+                    out.push_str("return ");
+                    emit_expr_ctx(func, indent + 1, false, out);
+                    out.push('\n');
+                    out.push_str(&"  ".repeat(indent));
+                    out.push_str("end)()");
+                }
+                f if is_atom(f) => emit_expr_ctx(f, indent, false, out),
                 other => {
                     out.push('(');
-                    emit_expr(other, out);
+                    emit_expr_ctx(other, indent, false, out);
                     out.push(')');
                 }
             }
-            out.push('(');
-            for (i, arg) in args.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
+            if !matches!(&**func, IrExpr::Function { .. }) || !at_line_start {
+                out.push('(');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    emit_expr_ctx(arg, indent, false, out);
                 }
-                emit_expr(arg, out);
+                out.push(')');
             }
-            out.push(')');
         }
         IrExpr::Un { op, expr, .. } => {
-            let arg = |out: &mut String| match &**expr {
-                IrExpr::Var(_) | IrExpr::Num(_) | IrExpr::Str(_) | IrExpr::Call { .. } => {
-                    emit_expr(expr, out)
-                }
-                _ => {
-                    out.push('(');
-                    emit_expr(expr, out);
-                    out.push(')');
-                }
-            };
             match op {
                 // Raw unary minus: JS coerces via jsNeg only if needed; raw is
                 // exact for numbers, and the subset's operands are numbers.
                 IrUnOp::Neg => {
                     out.push('-');
-                    arg(out);
+                    match &**expr {
+                        e if is_atom(e) => emit_expr_ctx(e, indent, false, out),
+                        _ => {
+                            out.push('(');
+                            emit_expr_ctx(expr, indent, false, out);
+                            out.push(')');
+                        }
+                    }
                 }
                 IrUnOp::Not => {
                     out.push_str("jsNot(");
-                    emit_expr(expr, out);
+                    emit_expr_ctx(expr, indent, false, out);
                     out.push(')');
                 }
                 IrUnOp::Len => {
                     out.push_str("jsLen(");
-                    emit_expr(expr, out);
+                    emit_expr_ctx(expr, indent, false, out);
                     out.push(')');
                 }
             }
@@ -131,28 +157,70 @@ fn emit_expr(expr: &IrExpr, out: &mut String) {
                     _ => unreachable!(),
                 });
                 out.push_str("function() return ");
-                emit_expr(lhs, out);
+                emit_expr_ctx(lhs, indent, false, out);
                 out.push_str(" end, function() return ");
-                emit_expr(rhs, out);
+                emit_expr_ctx(rhs, indent, false, out);
                 out.push_str(" end)");
             }
             IrBinOp::Ne => {
                 out.push_str("not jsStrictEq(");
-                emit_expr(lhs, out);
+                emit_expr_ctx(lhs, indent, false, out);
                 out.push_str(", ");
-                emit_expr(rhs, out);
+                emit_expr_ctx(rhs, indent, false, out);
                 out.push(')');
             }
             other => {
                 out.push_str(bin_helper(*other));
                 out.push('(');
-                emit_expr(lhs, out);
+                emit_expr_ctx(lhs, indent, false, out);
                 out.push_str(", ");
-                emit_expr(rhs, out);
+                emit_expr_ctx(rhs, indent, false, out);
                 out.push(')');
             }
         },
+        IrExpr::Cond { cond, then, else_, .. } => {
+            out.push_str("jsCond(");
+            emit_expr_ctx(cond, indent, false, out);
+            out.push_str(", function() return ");
+            emit_expr_ctx(then, indent, false, out);
+            out.push_str(" end, function() return ");
+            emit_expr_ctx(else_, indent, false, out);
+            out.push_str(" end)");
+        }
+        IrExpr::Function { params, body, .. } => {
+            emit_function(params, body, indent, out);
+        }
     }
+}
+
+/// Emit an anonymous Lua function value. Params normalize `nil` to
+/// `jsUndefined` (JS pads missing args with undefined, never nil). The
+/// fallthrough return is `jsUndefined` (JS functions return undefined when
+/// they fall off the end); an explicit `return;` also lowers to that.
+fn emit_function(params: &[String], body: &[IrStmt], indent: usize, out: &mut String) {
+    out.push_str("function(");
+    out.push_str(&params.join(", "));
+    out.push_str(")\n");
+    let pad = "  ".repeat(indent + 1);
+    for param in params {
+        out.push_str(&pad);
+        out.push_str("if ");
+        out.push_str(param);
+        out.push_str(" == nil then ");
+        out.push_str(param);
+        out.push_str(" = jsUndefined end\n");
+    }
+    for stmt in body {
+        emit_stmt(stmt, indent + 1, out);
+    }
+    // JS fallthrough returns `undefined`. Lua forbids statements after
+    // `return`, so only emit the fallthrough if the body doesn't end in one.
+    if !matches!(body.last(), Some(IrStmt::Return { .. })) {
+        out.push_str(&pad);
+        out.push_str("return jsUndefined\n");
+    }
+    out.push_str(&"  ".repeat(indent));
+    out.push_str("end");
 }
 
 fn emit_stmt(stmt: &IrStmt, indent: usize, out: &mut String) {
@@ -160,13 +228,33 @@ fn emit_stmt(stmt: &IrStmt, indent: usize, out: &mut String) {
     match stmt {
         IrStmt::Local { name, value, .. } => {
             out.push_str(&pad);
-            out.push_str("local ");
-            out.push_str(name);
-            if let Some(value) = value {
-                out.push_str(" = ");
-                emit_expr(value, out);
+            // Local function values lower to `local name` + `name =
+            // function(...)`: recursion works via the upvalue (Lua has no
+            // named function expressions like JS does).
+            match value {
+                Some(IrExpr::Function { params, body, .. }) => {
+                    out.push_str("local ");
+                    out.push_str(name);
+                    out.push('\n');
+                    out.push_str(&pad);
+                    out.push_str(name);
+                    out.push_str(" = ");
+                    emit_function(params, body, indent, out);
+                    out.push('\n');
+                }
+                Some(value) => {
+                    out.push_str("local ");
+                    out.push_str(name);
+                    out.push_str(" = ");
+                    emit_expr_ctx(value, indent, false, out);
+                    out.push('\n');
+                }
+                None => {
+                    out.push_str("local ");
+                    out.push_str(name);
+                    out.push('\n');
+                }
             }
-            out.push('\n');
         }
         IrStmt::Assign { target, value, .. } => {
             out.push_str(&pad);
@@ -174,12 +262,12 @@ fn emit_stmt(stmt: &IrStmt, indent: usize, out: &mut String) {
                 IrTarget::Var(name) => out.push_str(name),
             }
             out.push_str(" = ");
-            emit_expr(value, out);
+            emit_expr_ctx(value, indent, false, out);
             out.push('\n');
         }
         IrStmt::Expr { expr, .. } => {
             out.push_str(&pad);
-            emit_expr(expr, out);
+            emit_expr_ctx(expr, indent, true, out);
             out.push('\n');
         }
         IrStmt::Do { body, .. } => {
@@ -194,11 +282,85 @@ fn emit_stmt(stmt: &IrStmt, indent: usize, out: &mut String) {
         IrStmt::Return { values, .. } => {
             out.push_str(&pad);
             out.push_str("return");
-            if let Some(value) = values.first() {
-                out.push(' ');
-                emit_expr(value, out);
+            match values.first() {
+                Some(value) => {
+                    out.push(' ');
+                    emit_expr_ctx(value, indent, false, out);
+                }
+                // JS `return;` returns `undefined`; a bare `return` would
+                // return zero values instead.
+                None => out.push_str(" jsUndefined"),
             }
             out.push('\n');
+        }
+        IrStmt::If { arms, else_, .. } => {
+            for (i, (cond, body)) in arms.iter().enumerate() {
+                if i == 0 {
+                    out.push_str(&pad);
+                    out.push_str("if ");
+                } else {
+                    out.push_str(&pad);
+                    out.push_str("elseif ");
+                }
+                out.push_str("jsTruthy(");
+                emit_expr_ctx(cond, indent, false, out);
+                out.push_str(") then\n");
+                for inner in body {
+                    emit_stmt(inner, indent + 1, out);
+                }
+            }
+            if let Some(else_) = else_ {
+                out.push_str(&pad);
+                out.push_str("else\n");
+                for inner in else_ {
+                    emit_stmt(inner, indent + 1, out);
+                }
+            }
+            out.push_str(&pad);
+            out.push_str("end\n");
+        }
+        IrStmt::While { cond, body, .. } => {
+            out.push_str(&pad);
+            out.push_str("while jsTruthy(");
+            emit_expr_ctx(cond, indent, false, out);
+            out.push_str(") do\n");
+            for inner in body {
+                emit_stmt(inner, indent + 1, out);
+            }
+            out.push_str(&pad);
+            out.push_str("end\n");
+        }
+        IrStmt::NumericFor {
+            var,
+            start,
+            stop,
+            step,
+            body,
+            ..
+        } => {
+            // Reached from js2lua only for JS-origin IR built directly (tests)
+            // — JS classic-for semantics differ; use raw Lua numeric for here.
+            out.push_str(&pad);
+            out.push_str("for ");
+            out.push_str(var);
+            out.push_str(" = ");
+            emit_expr_ctx(start, indent, false, out);
+            out.push_str(", ");
+            emit_expr_ctx(stop, indent, false, out);
+            if let Some(step) = step {
+                out.push_str(", ");
+                emit_expr_ctx(step, indent, false, out);
+            }
+            out.push_str(" do\n");
+            for inner in body {
+                emit_stmt(inner, indent + 1, out);
+            }
+            out.push_str(&pad);
+            out.push_str("end\n");
+        }
+        IrStmt::Break { .. } => {
+            out.push_str(&pad);
+            out.push_str("break\n");
         }
     }
 }

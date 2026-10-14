@@ -49,8 +49,13 @@ pub fn run_lua(source: &str) -> Result<String, String> {
             Ok(())
         })
         .map_err(|e| e.to_string())?;
-    lua.globals().set("print", print).map_err(|e| e.to_string())?;
-    lua.load(source).set_name("case").exec().map_err(|e| e.to_string())?;
+    lua.globals()
+        .set("print", print)
+        .map_err(|e| e.to_string())?;
+    lua.load(source)
+        .set_name("case")
+        .exec()
+        .map_err(|e| e.to_string())?;
     let out = buf.borrow().clone();
     Ok(out)
 }
@@ -67,10 +72,12 @@ pub fn run_compiled_lua(emitted: &str) -> Result<String, String> {
 
 /// Prelude for lua2js-compiled code: load the lure runtime and expose its
 /// helpers (plus the stdlib subset) as globals.
-const LURE_PRELUDE: &str = r#"import * as L from './lure_runtime.ts';
+const LURE_PRELUDE: &str = r#"const L = require('./lure_runtime.ts');
 Object.assign(globalThis, L);
 globalThis.assert = L.luaAssert;
 "#;
+
+
 
 /// Prelude for reference runs of JS corpus cases: minimal `assert` shim
 /// (node has no global assert), leaving everything else stock.
@@ -89,9 +96,14 @@ fn run_node(files: &[(&str, &str)]) -> Result<String, String> {
     for (name, contents) in files {
         fs::write(dir.join(name), contents).map_err(|e| e.to_string())?;
     }
+    let entry = if files.iter().any(|(name, _)| *name == "main.cjs") {
+        "main.cjs"
+    } else {
+        "main.ts"
+    };
     let output = Command::new("node")
         .arg("--disable-warning=ExperimentalWarning")
-        .arg("main.ts")
+        .arg(entry)
         .current_dir(&dir)
         .output()
         .map_err(|e| format!("failed to spawn node: {e}"))?;
@@ -116,10 +128,14 @@ fn lure_runtime_source() -> String {
 /// an arrow IIFE so that chunk-level `return` (legal in our classic-script
 /// output) is also legal inside the ESM harness module.
 pub fn run_compiled_js(emitted: &str) -> Result<String, String> {
-    let main = format!("{LURE_PRELUDE}\nvoid (() => {{\n{emitted}\n}})();\n");
+    // CommonJS + sloppy mode: the compiled chunk runs as a classic script —
+    // chunk-level `return` is legal (CJS wraps files in a function), reads of
+    // globals resolve through the global object, and assignment to an
+    // undeclared name creates a global (Lua chunk semantics).
+    let main = format!("{LURE_PRELUDE}\n{emitted}\n");
     run_node(&[
         ("lure_runtime.ts", &lure_runtime_source()),
-        ("main.ts", &main),
+        ("main.cjs", &main),
     ])
 }
 

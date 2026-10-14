@@ -9,6 +9,7 @@ exports.luaTruthy = luaTruthy;
 exports.luaNot = luaNot;
 exports.luaAnd = luaAnd;
 exports.luaOr = luaOr;
+exports.luaCond = luaCond;
 exports.luaToNumber = luaToNumber;
 exports.luaNumToStr = luaNumToStr;
 exports.luaToStr = luaToStr;
@@ -101,6 +102,11 @@ function luaAnd(a, b) {
 function luaOr(a, b) {
     const av = a();
     return luaTruthy(av) ? av : b();
+}
+// Conditional expression (`c and a or b` lowering / ternary): branches are
+// thunks so only the taken one runs.
+function luaCond(c, a, b) {
+    return luaTruthy(c) ? a() : b();
 }
 // ---------------------------------------------------------------------------
 // Coercions

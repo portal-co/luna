@@ -13,8 +13,9 @@ pub mod emit;
 use crate::error::CompileError;
 use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp, Span};
 use full_moon::ast::{
-    Assignment, BinOp, Call, Expression, FunctionArgs, FunctionCall, LastStmt, LocalAssignment,
-    Prefix, Return, Stmt, Suffix, UnOp, Var,
+    Assignment, BinOp, Call, Expression, FunctionArgs, FunctionBody, FunctionCall,
+    FunctionDeclaration, LastStmt, LocalAssignment, LocalFunction, Parameter, Prefix, Return,
+    Stmt, Suffix, UnOp, Var,
 };
 use full_moon::node::Node;
 use full_moon::tokenizer::{TokenReference, TokenType};
@@ -43,10 +44,7 @@ fn err_at(node: &impl Node, message: impl Into<String>) -> CompileError {
 pub fn parse_lua_number(token: &TokenReference) -> Result<f64, CompileError> {
     let text = token.token().to_string();
     let text = text.trim();
-    if let Some(hex) = text
-        .strip_prefix("0x")
-        .or_else(|| text.strip_prefix("0X"))
-    {
+    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         if hex.contains(['.', 'p', 'P']) {
             return Err(err_at(token, "hex float literals are outside the subset"));
         }
@@ -64,7 +62,9 @@ pub fn parse_lua_number(token: &TokenReference) -> Result<f64, CompileError> {
 /// skipping is NOT supported.
 pub fn unescape_lua_string(token: &TokenReference) -> Result<String, CompileError> {
     let TokenType::StringLiteral {
-        literal, quote_type, ..
+        literal,
+        quote_type,
+        ..
     } = token.token().token_type()
     else {
         return Err(err_at(token, "expected a string literal"));
@@ -137,7 +137,8 @@ fn unescape_short_string(token: &TokenReference, raw: &str) -> Result<String, Co
                         .ok_or_else(|| err_at(token, "\\u escape out of range"))?;
                 }
                 out.push(
-                    char::from_u32(value).ok_or_else(|| err_at(token, "\\u escape out of range"))?,
+                    char::from_u32(value)
+                        .ok_or_else(|| err_at(token, "\\u escape out of range"))?,
                 );
             }
             'z' => {
@@ -171,22 +172,91 @@ fn unescape_short_string(token: &TokenReference, raw: &str) -> Result<String, Co
 /// runtime or generates internally. Lua locals with these names are mangled
 /// with a `lua$` prefix.
 const JS_RESERVED: &[&str] = &[
-    "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger",
-    "default", "delete", "do", "else", "enum", "eval", "export", "extends", "false", "finally",
-    "for", "function", "if", "implements", "import", "in", "instanceof", "interface", "let",
-    "new", "null", "package", "private", "protected", "public", "return", "static", "super",
-    "switch", "this", "throw", "true", "try", "typeof", "undefined", "var", "void", "while",
-    "with", "yield",
+    "arguments",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "eval",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "undefined",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
 ];
 
 /// Names the emitted JS expects to find in scope (runtime helpers, seeded
 /// globals). Any Lua *local* colliding with one is mangled; globals pass
 /// through unmangled (a global `print` IS the runtime's print).
 const JS_RUNTIME_NAMES: &[&str] = &[
-    "assert", "error", "ipairs", "luaAdd", "luaAnd", "luaArith", "luaConcat", "luaEq", "luaGe",
-    "luaGt", "luaLe", "luaLen", "luaLt", "luaMod", "luaMul", "luaNe", "luaNeg", "luaNot", "luaOr",
-    "luaPow", "luaSub", "luaToNumber", "luaToStr", "luaTruthy", "pairs", "pcall", "print",
-    "tonumber", "tostring", "type",
+    "assert",
+    "error",
+    "ipairs",
+    "luaAdd",
+    "luaAnd",
+    "luaArith",
+    "luaConcat",
+    "luaEq",
+    "luaGe",
+    "luaGt",
+    "luaLe",
+    "luaLen",
+    "luaLt",
+    "luaMod",
+    "luaMul",
+    "luaNe",
+    "luaNeg",
+    "luaNot",
+    "luaOr",
+    "luaPow",
+    "luaSub",
+    "luaToNumber",
+    "luaToStr",
+    "luaTruthy",
+    "pairs",
+    "pcall",
+    "print",
+    "tonumber",
+    "tostring",
+    "type",
 ];
 
 fn needs_mangle(name: &str) -> bool {
@@ -281,7 +351,7 @@ impl LuaLower {
         })
     }
 
-    fn lower_call(&self, call: &FunctionCall) -> Result<IrExpr, CompileError> {
+    fn lower_call(&mut self, call: &FunctionCall) -> Result<IrExpr, CompileError> {
         let span = span_of(call);
         let func = match call.prefix() {
             Prefix::Name(name) => IrExpr::Var(self.resolve_name(name.token().to_string().trim())),
@@ -291,7 +361,9 @@ impl LuaLower {
         let mut call_args: Option<Vec<IrExpr>> = None;
         for suffix in call.suffixes() {
             match suffix {
-                Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses { arguments, .. })) => {
+                Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses {
+                    arguments, ..
+                })) => {
                     if call_args.is_some() {
                         return Err(err_at(
                             suffix,
@@ -339,7 +411,7 @@ impl LuaLower {
         })
     }
 
-    fn lower_expr(&self, expr: &Expression) -> Result<IrExpr, CompileError> {
+    fn lower_expr(&mut self, expr: &Expression) -> Result<IrExpr, CompileError> {
         match expr {
             Expression::Number(token) => Ok(IrExpr::Num(parse_lua_number(token)?)),
             Expression::String(token) => Ok(IrExpr::Str(unescape_lua_string(token)?)),
@@ -369,14 +441,21 @@ impl LuaLower {
                 })
             }
             Expression::FunctionCall(call) => self.lower_call(call),
-            Expression::Function(_) => Err(err_at(expr, "functions arrive in Phase 2")),
+            Expression::Function(function) => {
+                let (params, body) = self.lower_function_body(function.body(), None)?;
+                Ok(IrExpr::Function {
+                    params,
+                    body,
+                    span: span_of(expr),
+                })
+            }
             Expression::TableConstructor(_) => {
                 Err(err_at(expr, "table constructors arrive in Phase 3"))
             }
             Expression::Var(var) => match var {
-                Var::Name(token) => {
-                    Ok(IrExpr::Var(self.resolve_name(token.token().to_string().trim())))
-                }
+                Var::Name(token) => Ok(IrExpr::Var(
+                    self.resolve_name(token.token().to_string().trim()),
+                )),
                 Var::Expression(_) => Err(err_at(expr, "indexing arrives in Phase 3")),
                 other => Err(err_at(expr, format!("unsupported variable form `{other}`"))),
             },
@@ -404,16 +483,13 @@ impl LuaLower {
             ));
         }
         let source_name = names[0].token().to_string();
-        let value = exprs
-            .first()
-            .map(|e| self.lower_expr(e))
-            .transpose()?;
+        let value = exprs.first().map(|e| self.lower_expr(e)).transpose()?;
         // Lua scoping: the binding becomes visible only after its initializer.
         let name = self.declare_local(source_name.trim());
         Ok(IrStmt::Local { name, value, span })
     }
 
-    fn lower_assignment(&self, stmt: &Assignment) -> Result<IrStmt, CompileError> {
+    fn lower_assignment(&mut self, stmt: &Assignment) -> Result<IrStmt, CompileError> {
         let span = span_of(stmt);
         let vars: Vec<_> = stmt.variables().iter().collect();
         if vars.len() != 1 {
@@ -426,7 +502,12 @@ impl LuaLower {
         let target = match &vars[0] {
             Var::Name(token) => IrTarget::Var(self.resolve_name(token.token().to_string().trim())),
             Var::Expression(_) => return Err(err_at(stmt, "index assignment arrives in Phase 3")),
-            other => return Err(err_at(stmt, format!("unsupported assignment target `{other}`"))),
+            other => {
+                return Err(err_at(
+                    stmt,
+                    format!("unsupported assignment target `{other}`"),
+                ));
+            }
         };
         Ok(IrStmt::Assign {
             target,
@@ -435,7 +516,94 @@ impl LuaLower {
         })
     }
 
-    fn lower_return(&self, ret: &Return) -> Result<IrStmt, CompileError> {
+    /// Lower a function body: params + block in a fresh scope.
+    fn lower_function_body(
+        &mut self,
+        body: &FunctionBody,
+        self_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<IrStmt>), CompileError> {
+        self.scopes.push(HashSet::new());
+        let result = (|| {
+            let mut params = Vec::new();
+            for param in body.parameters() {
+                match param {
+                    Parameter::Name(token) => {
+                        let source = token.token().to_string();
+                        let source = source.trim();
+                        params.push(self.declare_local(source));
+                    }
+                    Parameter::Ellipsis(token) => {
+                        return Err(err_at(token, "vararg parameters arrive in Phase 4"));
+                    }
+                    other => {
+                        return Err(err_at(
+                            body,
+                            format!("unsupported parameter form `{other}`"),
+                        ));
+                    }
+                }
+            }
+            if let Some(name) = self_name {
+                // Visible inside the body after params (a same-named parameter
+                // would shadow it, matching Lua's `local function f` where f
+                // is an upvalue of the body).
+                self.declare_local(name);
+            }
+            let stmts = self.lower_block(body.block())?;
+            Ok((params, stmts))
+        })();
+        self.scopes.pop();
+        result
+    }
+
+    fn lower_function_declaration(
+        &mut self,
+        decl: &FunctionDeclaration,
+    ) -> Result<IrStmt, CompileError> {
+        let span = span_of(decl);
+        let names: Vec<_> = decl.name().names().iter().collect();
+        if names.len() != 1 || decl.name().method_name().is_some() {
+            return Err(err_at(
+                decl,
+                "dotted/method function names arrive in Phase 3",
+            ));
+        }
+        let source_name = names[0].token().to_string();
+        // `function f() end` (without `local`) assigns to an existing local or
+        // a global — it never creates a binding, so no declare_local.
+        let name = self.resolve_name(source_name.trim());
+        let (params, body) = self.lower_function_body(decl.body(), None)?;
+        Ok(IrStmt::Assign {
+            target: IrTarget::Var(name),
+            value: IrExpr::Function {
+                params,
+                body,
+                span,
+            },
+            span,
+        })
+    }
+
+    fn lower_local_function(&mut self, local: &LocalFunction) -> Result<IrStmt, CompileError> {
+        let span = span_of(local);
+        let source_name = local.name().token().to_string();
+        let source_name = source_name.trim();
+        // Lua semantics: the name is in scope inside its own body (recursion),
+        // as an upvalue.
+        let name = self.declare_local(source_name);
+        let (params, body) = self.lower_function_body(local.body(), Some(source_name))?;
+        Ok(IrStmt::Local {
+            name,
+            value: Some(IrExpr::Function {
+                params,
+                body,
+                span,
+            }),
+            span,
+        })
+    }
+
+    fn lower_return(&mut self, ret: &Return) -> Result<IrStmt, CompileError> {
         let span = span_of(ret);
         let mut values = Vec::new();
         for expr in ret.returns() {
@@ -468,11 +636,65 @@ impl LuaLower {
                 });
                 Ok(())
             }
-            Stmt::If(_) => Err(err_at(stmt, "`if` arrives in Phase 2")),
-            Stmt::While(_) => Err(err_at(stmt, "`while` arrives in Phase 2")),
-            Stmt::NumericFor(_) => Err(err_at(stmt, "numeric `for` arrives in Phase 2")),
-            Stmt::FunctionDeclaration(_) | Stmt::LocalFunction(_) => {
-                Err(err_at(stmt, "functions arrive in Phase 2"))
+            Stmt::If(if_stmt) => {
+                let mut arms = Vec::new();
+                arms.push((
+                    self.lower_expr(if_stmt.condition())?,
+                    self.lower_block(if_stmt.block())?,
+                ));
+                if let Some(else_ifs) = if_stmt.else_if() {
+                    for else_if in else_ifs {
+                        arms.push((
+                            self.lower_expr(else_if.condition())?,
+                            self.lower_block(else_if.block())?,
+                        ));
+                    }
+                }
+                let else_ = if_stmt.else_block().map(|b| self.lower_block(b)).transpose()?;
+                out.push(IrStmt::If {
+                    arms,
+                    else_,
+                    span: span_of(stmt),
+                });
+                Ok(())
+            }
+            Stmt::While(while_stmt) => {
+                out.push(IrStmt::While {
+                    cond: self.lower_expr(while_stmt.condition())?,
+                    body: self.lower_block(while_stmt.block())?,
+                    span: span_of(stmt),
+                });
+                Ok(())
+            }
+            Stmt::NumericFor(for_stmt) => {
+                let span = span_of(for_stmt);
+                let var_source = for_stmt.index_variable().token().to_string();
+                // The start/stop/step exprs evaluate once in the enclosing
+                // scope; the loop var is a fresh local scoped to the body.
+                let start = self.lower_expr(for_stmt.start())?;
+                let stop = self.lower_expr(for_stmt.end())?;
+                let step = for_stmt.step().map(|s| self.lower_expr(s)).transpose()?;
+                self.scopes.push(HashSet::new());
+                let var = self.declare_local(var_source.trim());
+                let body = self.lower_block(for_stmt.block());
+                self.scopes.pop();
+                out.push(IrStmt::NumericFor {
+                    var,
+                    start,
+                    stop,
+                    step,
+                    body: body?,
+                    span,
+                });
+                Ok(())
+            }
+            Stmt::FunctionDeclaration(decl) => {
+                out.push(self.lower_function_declaration(decl)?);
+                Ok(())
+            }
+            Stmt::LocalFunction(local) => {
+                out.push(self.lower_local_function(local)?);
+                Ok(())
             }
             Stmt::GenericFor(_) => Err(err_at(stmt, "generic `for` arrives in Phase 5")),
             Stmt::Repeat(_) => Err(err_at(stmt, "`repeat` is outside the subset (v0)")),
@@ -494,7 +716,9 @@ impl LuaLower {
                 match last {
                     LastStmt::Return(ret) => out.push(self.lower_return(ret)?),
                     LastStmt::Break(token) => {
-                        return Err(err_at(token, "`break` arrives in Phase 2 (with loops)"));
+                        out.push(IrStmt::Break {
+                            span: span_of(token),
+                        });
                     }
                     other => {
                         return Err(err_at(last, format!("`{other}` is outside the subset")));

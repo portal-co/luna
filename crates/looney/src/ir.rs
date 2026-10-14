@@ -110,6 +110,21 @@ pub enum IrExpr {
         rhs: Box<IrExpr>,
         span: Span,
     },
+    /// Conditional expression: Lua `c and a or b` idiom / JS ternary.
+    /// Conditions are truthiness-checked by the direction-paired runtime.
+    Cond {
+        cond: Box<IrExpr>,
+        then: Box<IrExpr>,
+        else_: Box<IrExpr>,
+        span: Span,
+    },
+    /// Function value: `function(...)` / `function f(...) {}` / arrow.
+    /// Varargs/rest params are Phase 4.
+    Function {
+        params: Vec<String>,
+        body: Vec<IrStmt>,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +157,31 @@ pub enum IrStmt {
     },
     Return {
         values: Vec<IrExpr>,
+        span: Span,
+    },
+    /// Chain of condition/block arms; `else_` is the final fallthrough.
+    If {
+        arms: Vec<(IrExpr, Vec<IrStmt>)>,
+        else_: Option<Vec<IrStmt>>,
+        span: Span,
+    },
+    While {
+        cond: IrExpr,
+        body: Vec<IrStmt>,
+        span: Span,
+    },
+    /// Lua numeric `for i = start, stop[, step]` — the loop variable is
+    /// immutable inside the body and fresh per iteration (JS: `let` in a block
+    /// per iteration, so closures capture per-iteration values, matching Lua).
+    NumericFor {
+        var: String,
+        start: IrExpr,
+        stop: IrExpr,
+        step: Option<IrExpr>,
+        body: Vec<IrStmt>,
+        span: Span,
+    },
+    Break {
         span: Span,
     },
 }
@@ -191,6 +231,17 @@ fn validate_expr(expr: &IrExpr) -> Result<(), CompileError> {
             validate_expr(lhs)?;
             validate_expr(rhs)
         }
+        IrExpr::Cond { cond, then, else_, .. } => {
+            validate_expr(cond)?;
+            validate_expr(then)?;
+            validate_expr(else_)
+        }
+        IrExpr::Function { params, body, .. } => {
+            for param in params {
+                check_ident(param)?;
+            }
+            validate_stmts(body)
+        }
     }
 }
 
@@ -229,6 +280,37 @@ fn validate_stmt(stmt: &IrStmt) -> Result<(), CompileError> {
             }
             Ok(())
         }
+        IrStmt::If { arms, else_, .. } => {
+            for (cond, body) in arms {
+                validate_expr(cond)?;
+                validate_stmts(body)?;
+            }
+            if let Some(else_) = else_ {
+                validate_stmts(else_)?;
+            }
+            Ok(())
+        }
+        IrStmt::While { cond, body, .. } => {
+            validate_expr(cond)?;
+            validate_stmts(body)
+        }
+        IrStmt::NumericFor {
+            var,
+            start,
+            stop,
+            step,
+            body,
+            ..
+        } => {
+            check_ident(var)?;
+            validate_expr(start)?;
+            validate_expr(stop)?;
+            if let Some(step) = step {
+                validate_expr(step)?;
+            }
+            validate_stmts(body)
+        }
+        IrStmt::Break { .. } => Ok(()),
     }
 }
 

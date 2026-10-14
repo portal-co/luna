@@ -14,10 +14,13 @@ fn lua_corpus_compiled_matches_reference() {
         let source = fs::read_to_string(&path).unwrap();
         let emitted = looney::compile_lua_to_js(&source)
             .unwrap_or_else(|e| panic!("{name}: compile failed: {e}"));
-        let actual = harness::run_compiled_js(&emitted)
-            .unwrap_or_else(|e| panic!("{name}: compiled run failed: {e}\n--- emitted ---\n{emitted}"));
+        let actual = harness::run_compiled_js(&emitted).unwrap_or_else(|e| {
+            panic!("{name}: compiled run failed: {e}\n--- emitted ---\n{emitted}")
+        });
         match expected {
-            Some(expected) => harness::assert_output_eq(&format!("{name} (expected)"), &actual, &expected),
+            Some(expected) => {
+                harness::assert_output_eq(&format!("{name} (expected)"), &actual, &expected)
+            }
             None => {
                 let reference = harness::run_lua(&source)
                     .unwrap_or_else(|e| panic!("{name}: reference lua run failed: {e}"));
@@ -33,10 +36,13 @@ fn js_corpus_compiled_matches_reference() {
         let source = fs::read_to_string(&path).unwrap();
         let emitted = looney::compile_js_to_lua(&source)
             .unwrap_or_else(|e| panic!("{name}: compile failed: {e}"));
-        let actual = harness::run_compiled_lua(&emitted)
-            .unwrap_or_else(|e| panic!("{name}: compiled run failed: {e}\n--- emitted ---\n{emitted}"));
+        let actual = harness::run_compiled_lua(&emitted).unwrap_or_else(|e| {
+            panic!("{name}: compiled run failed: {e}\n--- emitted ---\n{emitted}")
+        });
         match expected {
-            Some(expected) => harness::assert_output_eq(&format!("{name} (expected)"), &actual, &expected),
+            Some(expected) => {
+                harness::assert_output_eq(&format!("{name} (expected)"), &actual, &expected)
+            }
             None => {
                 let reference = harness::run_reference_js(&source)
                     .unwrap_or_else(|e| panic!("{name}: reference js run failed: {e}"));

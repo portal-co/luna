@@ -18,6 +18,7 @@ export declare function luaTruthy(x: LuaObject): boolean;
 export declare function luaNot(x: LuaObject): boolean;
 export declare function luaAnd(a: () => LuaObject, b: () => LuaObject): LuaObject;
 export declare function luaOr(a: () => LuaObject, b: () => LuaObject): LuaObject;
+export declare function luaCond(c: LuaObject, a: () => LuaObject, b: () => LuaObject): LuaObject;
 export declare function luaToNumber(x: LuaObject): number | null;
 export declare function luaNumToStr(n: number): string;
 export declare function luaToStr(x: LuaObject): string;

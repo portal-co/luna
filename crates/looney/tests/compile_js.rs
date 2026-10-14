@@ -4,9 +4,26 @@ mod harness;
 
 #[test]
 fn golden_arith() {
-    let source = std::fs::read_to_string(harness::manifest_rel("tests/cases_j2l/arith.js")).unwrap();
+    let source =
+        std::fs::read_to_string(harness::manifest_rel("tests/cases_j2l/arith.js")).unwrap();
     let emitted = looney::compile_js_to_lua(&source).unwrap();
     harness::check_golden("j2l_arith.lua.snap", &emitted);
+}
+
+#[test]
+fn golden_control() {
+    let source =
+        std::fs::read_to_string(harness::manifest_rel("tests/cases_j2l/control.js")).unwrap();
+    let emitted = looney::compile_js_to_lua(&source).unwrap();
+    harness::check_golden("j2l_control.lua.snap", &emitted);
+}
+
+#[test]
+fn golden_functions() {
+    let source =
+        std::fs::read_to_string(harness::manifest_rel("tests/cases_j2l/functions.js")).unwrap();
+    let emitted = looney::compile_js_to_lua(&source).unwrap();
+    harness::check_golden("j2l_functions.lua.snap", &emitted);
 }
 
 #[test]
@@ -20,25 +37,28 @@ fn golden_keeps_runtime_separate() {
 #[test]
 fn rejects_out_of_subset_constructs_with_positioned_errors() {
     let cases: &[&str] = &[
-        "let a = 1 == 1;",      // loose equality
-        "let a = 1 != 2;",      // loose inequality
-        "x.y;",                 // property access: Phase 3
-        "let o = {};",          // object literals: Phase 3
-        "let a = [];",          // array literals: Phase 3
-        "function f() {}",      // functions: Phase 2
-        "let f = () => 1;",     // arrows: Phase 2
-        "if (true) {}",         // if: Phase 2
-        "while (true) {}",      // while: Phase 2
-        "for (;;) {}",          // for: Phase 2
-        "let a = 1 ? 2 : 3;",   // ternary: Phase 2
-        "return 1;",            // top-level return: Phase 2 (functions only)
-        "let a = x ?? y;",      // nullish coalescing
-        "let a = `t`;",         // template literals
-        "let a$b = 1;",         // `$` in identifiers
-        "import x from 'y';",   // modules
-        "a += 1;",              // compound assignment
-        "a++;",                 // update expressions
-        "let {a} = b;",         // destructuring
+        "let a = 1 == 1;",       // loose equality
+        "let a = 1 != 2;",       // loose inequality
+        "x.y;",                  // property access: Phase 3
+        "let o = {};",           // object literals: Phase 3
+        "let a = [];",           // array literals: Phase 3
+        "return 1;",             // top-level return (JS has none)
+        "for (;;) {}",           // non-numeric-for shape
+        "for (let i = 0; i < 3; i++) {}", // `<` is not the numeric-for shape
+        "let a = x ?? y;",       // nullish coalescing
+        "let a = `t`;",          // template literals
+        "let a$b = 1;",          // `$` in identifiers
+        "import x from 'y';",    // modules
+        "a *= 2;",               // unsupported compound assignment
+        "let b = a++;",          // update expressions in expression position
+        "let {a} = b;",          // destructuring
+        "async function f() {}", // async
+        "function* g() {}",      // generators
+        "let h = function* () {};", // generator expressions
+        "this.x = 1;",           // `this` (methods are Phase 3)
+        "let i = () => this;",   // `this` in arrows
+        "f(...args);",           // spread calls: Phase 4
+        "let j = (x) => arguments;", // `arguments`
     ];
     for source in cases {
         match looney::compile_js_to_lua(source) {

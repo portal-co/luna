@@ -1,0 +1,29 @@
+local fib
+local takesTwo
+fib = function(n)
+  if n == nil then n = jsUndefined end
+  if jsTruthy(jsLt(n, 2)) then
+    return n
+  end
+  return jsAdd(fib(jsSub(n, 1)), fib(jsSub(n, 2)))
+end
+takesTwo = function(a, b)
+  if a == nil then a = jsUndefined end
+  if b == nil then b = jsUndefined end
+  assert(jsStrictEq(a, 1))
+  assert(jsStrictEq(jsTypeof(b), "undefined"))
+  return jsUndefined
+end
+assert(jsStrictEq(fib(10), 55))
+local apply
+apply = function(f, x)
+  if f == nil then f = jsUndefined end
+  if x == nil then x = jsUndefined end
+  return f(x)
+end
+assert(jsStrictEq(apply(function(v)
+  if v == nil then v = jsUndefined end
+  return jsMul(v, 2)
+end, 21), 42))
+takesTwo(1)
+jsLog("ok")
