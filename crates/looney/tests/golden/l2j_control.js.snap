@@ -6,12 +6,16 @@ if (luaTruthy(luaEq(x, 0))) {
 } else {
     x = 4;
 }
-assert(luaEq(x, 1));
+luaCall(assert, [
+    luaEq(x, 1)
+]);
 let i = 0;
 while(luaTruthy(luaLt(i, 5))){
     i = luaAdd(i, 1);
 }
-assert(luaEq(i, 5));
+luaCall(assert, [
+    luaEq(i, 5)
+]);
 let total = 0;
 {
     let lua$limit = 10;
@@ -19,21 +23,27 @@ let total = 0;
     for(let j = 1; lua$step > 0 ? j <= lua$limit : j >= lua$limit; j = luaAdd(j, lua$step)){
         total = luaAdd(total, j);
     }
-}assert(luaEq(total, 55));
+}luaCall(assert, [
+    luaEq(total, 55)
+]);
 {
     let lua$limit = 1;
     let lua$step = -2;
     for(let j = 10; lua$step > 0 ? j <= lua$limit : j >= lua$limit; j = luaAdd(j, lua$step)){
         total = luaAdd(total, 1);
     }
-}assert(luaEq(total, 60));
+}luaCall(assert, [
+    luaEq(total, 60)
+]);
 {
     let lua$limit = 0;
     let lua$step = 1;
     for(let j = 1; lua$step > 0 ? j <= lua$limit : j >= lua$limit; j = luaAdd(j, lua$step)){
         total = luaAdd(total, 100);
     }
-}assert(luaEq(total, 60));
+}luaCall(assert, [
+    luaEq(total, 60)
+]);
 let k = 0;
 while(luaTruthy(true)){
     k = luaAdd(k, 1);
@@ -41,5 +51,9 @@ while(luaTruthy(true)){
         break;
     }
 }
-assert(luaEq(k, 3));
-print("ok");
+luaCall(assert, [
+    luaEq(k, 3)
+]);
+luaCall(print, [
+    "ok"
+]);

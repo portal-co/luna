@@ -11,11 +11,11 @@
 pub mod emit;
 
 use crate::error::CompileError;
-use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp, Span};
+use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTable, IrTarget, IrUnOp, Span};
 use full_moon::ast::{
-    Assignment, BinOp, Call, Expression, FunctionArgs, FunctionBody, FunctionCall,
-    FunctionDeclaration, LastStmt, LocalAssignment, LocalFunction, Parameter, Prefix, Return,
-    Stmt, Suffix, UnOp, Var,
+    Assignment, BinOp, Call, Expression, Field, FunctionArgs, FunctionBody, FunctionCall,
+    FunctionDeclaration, LastStmt, LocalAssignment, LocalFunction, Parameter, Prefix, Return, Stmt,
+    Suffix, TableConstructor, UnOp, Var,
 };
 use full_moon::node::Node;
 use full_moon::tokenizer::{TokenReference, TokenType};
@@ -232,14 +232,18 @@ const JS_RUNTIME_NAMES: &[&str] = &[
     "ipairs",
     "luaAdd",
     "luaAnd",
+    "luaCall",
     "luaArith",
     "luaConcat",
+    "luaCond",
     "luaEq",
     "luaGe",
+    "luaGet",
     "luaGt",
     "luaLe",
     "luaLen",
     "luaLt",
+    "luaMethodCall",
     "luaMod",
     "luaMul",
     "luaNe",
@@ -247,7 +251,10 @@ const JS_RUNTIME_NAMES: &[&str] = &[
     "luaNot",
     "luaOr",
     "luaPow",
+    "luaSet",
     "luaSub",
+    "luaTable",
+    "luaTableRecord",
     "luaToNumber",
     "luaToStr",
     "luaTruthy",
@@ -351,32 +358,47 @@ impl LuaLower {
         })
     }
 
-    fn lower_call(&mut self, call: &FunctionCall) -> Result<IrExpr, CompileError> {
-        let span = span_of(call);
-        let func = match call.prefix() {
+    /// Lower a prefix followed by a suffix chain (`a.b[c]:m(d)(e)...`).
+    /// Method calls desugar to explicit receiver: `a:m(x)` =
+    /// `(a["m"])(a, x)` with the receiver evaluated once.
+    fn lower_suffix_chain(
+        &mut self,
+        prefix: &Prefix,
+        suffixes: &[&Suffix],
+        span: Span,
+    ) -> Result<IrExpr, CompileError> {
+        let mut expr = match prefix {
             Prefix::Name(name) => IrExpr::Var(self.resolve_name(name.token().to_string().trim())),
-            Prefix::Expression(expr) => self.lower_expr(expr)?,
-            other => return Err(err_at(call, format!("unsupported call prefix `{other}`"))),
+            Prefix::Expression(inner) => self.lower_expr(inner)?,
+            other => return Err(err_at(prefix, format!("unsupported prefix `{other}`"))),
         };
-        let mut call_args: Option<Vec<IrExpr>> = None;
-        for suffix in call.suffixes() {
-            match suffix {
+        for suffix in suffixes {
+            expr = match suffix {
+                Suffix::Index(index) => match index {
+                    full_moon::ast::Index::Dot { name, .. } => IrExpr::Index {
+                        obj: Box::new(expr),
+                        key: Box::new(IrExpr::Str(name.token().to_string())),
+                        span,
+                    },
+                    full_moon::ast::Index::Brackets { expression, .. } => IrExpr::Index {
+                        obj: Box::new(expr),
+                        key: Box::new(self.lower_expr(expression)?),
+                        span,
+                    },
+                    other => {
+                        return Err(err_at(suffix, format!("unsupported index form `{other}`")));
+                    }
+                },
                 Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses {
                     arguments, ..
-                })) => {
-                    if call_args.is_some() {
-                        return Err(err_at(
-                            suffix,
-                            "chained calls are outside the subset for now",
-                        ));
-                    }
-                    call_args = Some(
-                        arguments
-                            .iter()
-                            .map(|arg| self.lower_expr(arg))
-                            .collect::<Result<Vec<_>, _>>()?,
-                    );
-                }
+                })) => IrExpr::Call {
+                    func: Box::new(expr),
+                    args: arguments
+                        .iter()
+                        .map(|arg| self.lower_expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    span,
+                },
                 Suffix::Call(Call::AnonymousCall(FunctionArgs::String(_))) => {
                     return Err(err_at(
                         suffix,
@@ -389,26 +411,159 @@ impl LuaLower {
                         "table call sugar `f{...}` is outside the subset",
                     ));
                 }
-                Suffix::Call(Call::MethodCall(_)) => {
-                    return Err(err_at(
-                        suffix,
-                        "method calls (`a:m(...)`) arrive in Phase 3",
-                    ));
-                }
-                Suffix::Index(_) => {
-                    return Err(err_at(suffix, "indexing arrives in Phase 3"));
+                Suffix::Call(Call::MethodCall(method)) => {
+                    let FunctionArgs::Parentheses { arguments, .. } = method.args() else {
+                        return Err(err_at(
+                            suffix,
+                            "method call sugar with string/table args is outside the subset",
+                        ));
+                    };
+                    let name = method.name().token().to_string();
+                    let args = arguments
+                        .iter()
+                        .map(|arg| self.lower_expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if matches!(expr, IrExpr::Var(_)) {
+                        // Stable receivers can use the documented explicit-
+                        // receiver IR shape directly: `a:m(x)` becomes
+                        // `a["m"](a, x)`.
+                        let mut explicit_args = Vec::with_capacity(args.len() + 1);
+                        explicit_args.push(expr.clone());
+                        explicit_args.extend(args);
+                        IrExpr::Call {
+                            func: Box::new(IrExpr::Index {
+                                obj: Box::new(expr),
+                                key: Box::new(IrExpr::Str(name)),
+                                span,
+                            }),
+                            args: explicit_args,
+                            span,
+                        }
+                    } else {
+                        // A computed receiver must only be evaluated once.
+                        // Use the runtime helper, which performs the same
+                        // explicit-receiver call after capturing the object.
+                        IrExpr::Call {
+                            func: Box::new(IrExpr::Var("luaMethodCall".into())),
+                            args: {
+                                let mut call_args = Vec::with_capacity(args.len() + 2);
+                                call_args.push(expr);
+                                call_args.push(IrExpr::Str(name));
+                                call_args.extend(args);
+                                call_args
+                            },
+                            span,
+                        }
+                    }
                 }
                 other => {
                     return Err(err_at(suffix, format!("unsupported call suffix `{other}`")));
                 }
+            };
+        }
+        Ok(expr)
+    }
+
+    fn lower_table(&mut self, table: &TableConstructor) -> Result<IrExpr, CompileError> {
+        // A keyed field switches the constructor to record form. Positional
+        // fields in a mixed constructor receive their 1-based Lua keys while
+        // preserving the source left-to-right evaluation order.
+        let span = span_of(table);
+        let mut ordered = Vec::new();
+        let mut has_key = false;
+        for field in table.fields() {
+            match field {
+                Field::ExpressionKey { key, value, .. } => {
+                    has_key = true;
+                    ordered.push((Some(self.lower_expr(key)?), self.lower_expr(value)?));
+                }
+                Field::NameKey { key, value, .. } => {
+                    has_key = true;
+                    ordered.push((
+                        Some(IrExpr::Str(key.token().to_string())),
+                        self.lower_expr(value)?,
+                    ));
+                }
+                Field::NoKey(value) => ordered.push((None, self.lower_expr(value)?)),
+                other => {
+                    return Err(err_at(other, "this table field is outside the subset"));
+                }
             }
         }
-        let args = call_args.ok_or_else(|| err_at(call, "expected a call"))?;
-        Ok(IrExpr::Call {
-            func: Box::new(func),
-            args,
-            span,
-        })
+        let fields = if !has_key {
+            IrTable::Array(ordered.into_iter().map(|(_, value)| value).collect())
+        } else {
+            let mut next_index = 1.0;
+            IrTable::Record(
+                ordered
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let key = key.unwrap_or_else(|| {
+                            let key = IrExpr::Num(next_index);
+                            next_index += 1.0;
+                            key
+                        });
+                        (key, value)
+                    })
+                    .collect(),
+            )
+        };
+        Ok(IrExpr::Table { fields, span })
+    }
+
+    fn lower_index_target(
+        &mut self,
+        var: &full_moon::ast::VarExpression,
+        span: Span,
+    ) -> Result<IrTarget, CompileError> {
+        let suffixes: Vec<_> = var.suffixes().collect();
+        let Some((last, preceding)) = suffixes.split_last() else {
+            return Err(CompileError::new("assignment target is not indexed"));
+        };
+        let mut obj = match var.prefix() {
+            Prefix::Name(name) => IrExpr::Var(self.resolve_name(name.token().to_string().trim())),
+            Prefix::Expression(inner) => self.lower_expr(inner)?,
+            other => return Err(err_at(var, format!("unsupported prefix `{other}`"))),
+        };
+        for suffix in preceding {
+            let Suffix::Index(index) = suffix else {
+                return Err(err_at(
+                    suffix,
+                    "calls cannot appear in an assignment target",
+                ));
+            };
+            let key = match index {
+                full_moon::ast::Index::Dot { name, .. } => IrExpr::Str(name.token().to_string()),
+                full_moon::ast::Index::Brackets { expression, .. } => {
+                    self.lower_expr(expression)?
+                }
+                other => return Err(err_at(suffix, format!("unsupported index form `{other}`"))),
+            };
+            obj = IrExpr::Index {
+                obj: Box::new(obj),
+                key: Box::new(key),
+                span,
+            };
+        }
+        let Suffix::Index(index) = last else {
+            return Err(err_at(last, "assignment target must end in an index"));
+        };
+        let key = match index {
+            full_moon::ast::Index::Dot { name, .. } => IrExpr::Str(name.token().to_string()),
+            full_moon::ast::Index::Brackets { expression, .. } => self.lower_expr(expression)?,
+            other => return Err(err_at(last, format!("unsupported index form `{other}"))),
+        };
+        Ok(IrTarget::Index { obj, key })
+    }
+
+    fn lower_call(&mut self, call: &FunctionCall) -> Result<IrExpr, CompileError> {
+        let span = span_of(call);
+        let suffixes: Vec<_> = call.suffixes().collect();
+        let expr = self.lower_suffix_chain(call.prefix(), &suffixes, span)?;
+        if !matches!(expr, IrExpr::Call { .. }) {
+            return Err(err_at(call, "expected a call"));
+        }
+        Ok(expr)
     }
 
     fn lower_expr(&mut self, expr: &Expression) -> Result<IrExpr, CompileError> {
@@ -449,14 +604,15 @@ impl LuaLower {
                     span: span_of(expr),
                 })
             }
-            Expression::TableConstructor(_) => {
-                Err(err_at(expr, "table constructors arrive in Phase 3"))
-            }
+            Expression::TableConstructor(table) => self.lower_table(table),
             Expression::Var(var) => match var {
                 Var::Name(token) => Ok(IrExpr::Var(
                     self.resolve_name(token.token().to_string().trim()),
                 )),
-                Var::Expression(_) => Err(err_at(expr, "indexing arrives in Phase 3")),
+                Var::Expression(var) => {
+                    let suffixes: Vec<_> = var.suffixes().collect();
+                    self.lower_suffix_chain(var.prefix(), &suffixes, span_of(expr))
+                }
                 other => Err(err_at(expr, format!("unsupported variable form `{other}`"))),
             },
             other => Err(err_at(
@@ -501,7 +657,7 @@ impl LuaLower {
         }
         let target = match &vars[0] {
             Var::Name(token) => IrTarget::Var(self.resolve_name(token.token().to_string().trim())),
-            Var::Expression(_) => return Err(err_at(stmt, "index assignment arrives in Phase 3")),
+            Var::Expression(var) => self.lower_index_target(var, span)?,
             other => {
                 return Err(err_at(
                     stmt,
@@ -575,11 +731,7 @@ impl LuaLower {
         let (params, body) = self.lower_function_body(decl.body(), None)?;
         Ok(IrStmt::Assign {
             target: IrTarget::Var(name),
-            value: IrExpr::Function {
-                params,
-                body,
-                span,
-            },
+            value: IrExpr::Function { params, body, span },
             span,
         })
     }
@@ -594,11 +746,7 @@ impl LuaLower {
         let (params, body) = self.lower_function_body(local.body(), Some(source_name))?;
         Ok(IrStmt::Local {
             name,
-            value: Some(IrExpr::Function {
-                params,
-                body,
-                span,
-            }),
+            value: Some(IrExpr::Function { params, body, span }),
             span,
         })
     }
@@ -650,7 +798,10 @@ impl LuaLower {
                         ));
                     }
                 }
-                let else_ = if_stmt.else_block().map(|b| self.lower_block(b)).transpose()?;
+                let else_ = if_stmt
+                    .else_block()
+                    .map(|b| self.lower_block(b))
+                    .transpose()?;
                 out.push(IrStmt::If {
                     arms,
                     else_,

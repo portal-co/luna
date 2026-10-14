@@ -19,10 +19,10 @@
 //!   semantics) with a sign-dependent continuation condition.
 
 use crate::error::CompileError;
-use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp};
+use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTable, IrTarget, IrUnOp};
 use swc_atoms::Atom;
 use swc_common::sync::Lrc;
-use swc_common::{FileName, SourceMap, SyntaxContext, DUMMY_SP, GLOBALS};
+use swc_common::{DUMMY_SP, FileName, GLOBALS, SourceMap, SyntaxContext};
 use swc_ecma_ast::*;
 use swc_ecma_codegen::{Emitter, text_writer::JsWriter};
 
@@ -161,10 +161,12 @@ fn param_prologue(name: &str) -> Stmt {
 fn function_expr(name: Option<&str>, params: &[String], body: &[IrStmt]) -> Expr {
     let mut stmts: Vec<Stmt> = params.iter().map(|p| param_prologue(p)).collect();
     stmts.extend(body.iter().map(emit_stmt));
-    stmts.push(Stmt::Return(ReturnStmt {
-        span: DUMMY_SP,
-        arg: Some(Box::new(null_lit())),
-    }));
+    if !matches!(body.last(), Some(IrStmt::Return { .. })) {
+        stmts.push(Stmt::Return(ReturnStmt {
+            span: DUMMY_SP,
+            arg: Some(Box::new(null_lit())),
+        }));
+    }
     Expr::Fn(FnExpr {
         ident: name.map(ident),
         function: Box::new(Function {
@@ -202,19 +204,24 @@ pub fn emit_expr(expr: &IrExpr) -> Expr {
             raw: None,
         })),
         IrExpr::Var(name) => Expr::Ident(ident(name)),
-        IrExpr::Call { func, args, .. } => Expr::Call(CallExpr {
-            span: DUMMY_SP,
-            ctxt: SyntaxContext::empty(),
-            callee: Callee::Expr(Box::new(emit_expr(func))),
-            args: args
-                .iter()
-                .map(|arg| ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(emit_expr(arg)),
-                })
-                .collect(),
-            type_args: None,
-        }),
+        IrExpr::Call { func, args, .. } => helper_call(
+            "luaCall",
+            vec![
+                emit_expr(func),
+                Expr::Array(ArrayLit {
+                    span: DUMMY_SP,
+                    elems: args
+                        .iter()
+                        .map(|arg| {
+                            Some(ExprOrSpread {
+                                spread: None,
+                                expr: Box::new(emit_expr(arg)),
+                            })
+                        })
+                        .collect(),
+                }),
+            ],
+        ),
         IrExpr::Un { op, expr, .. } => {
             let arg = emit_expr(expr);
             match op {
@@ -238,11 +245,67 @@ pub fn emit_expr(expr: &IrExpr) -> Expr {
                 other => helper_call(bin_helper(*other), vec![l, r]),
             }
         }
-        IrExpr::Cond { cond, then, else_, .. } => helper_call(
+        IrExpr::Cond {
+            cond, then, else_, ..
+        } => helper_call(
             "luaCond",
-            vec![emit_expr(cond), thunk(emit_expr(then)), thunk(emit_expr(else_))],
+            vec![
+                emit_expr(cond),
+                thunk(emit_expr(then)),
+                thunk(emit_expr(else_)),
+            ],
         ),
         IrExpr::Function { params, body, .. } => function_expr(None, params, body),
+        IrExpr::Index { obj, key, .. } => {
+            helper_call("luaGet", vec![emit_expr(obj), emit_expr(key)])
+        }
+        IrExpr::Table { fields, .. } => match fields {
+            // Array part: `luaTable([v1, v2, ...])` fills keys 1..=n (Lua base).
+            IrTable::Array(items) => helper_call(
+                "luaTable",
+                vec![Expr::Array(ArrayLit {
+                    span: DUMMY_SP,
+                    elems: items
+                        .iter()
+                        .map(|item| {
+                            Some(ExprOrSpread {
+                                spread: None,
+                                expr: Box::new(emit_expr(item)),
+                            })
+                        })
+                        .collect(),
+                })],
+            ),
+            // Record part: `luaTableRecord([[k1, v1], [k2, v2], ...])` — keys
+            // evaluated left to right, so key order is observable.
+            IrTable::Record(pairs) => helper_call(
+                "luaTableRecord",
+                vec![Expr::Array(ArrayLit {
+                    span: DUMMY_SP,
+                    elems: pairs
+                        .iter()
+                        .map(|(key, value)| {
+                            Some(ExprOrSpread {
+                                spread: None,
+                                expr: Box::new(Expr::Array(ArrayLit {
+                                    span: DUMMY_SP,
+                                    elems: vec![
+                                        Some(ExprOrSpread {
+                                            spread: None,
+                                            expr: Box::new(emit_expr(key)),
+                                        }),
+                                        Some(ExprOrSpread {
+                                            spread: None,
+                                            expr: Box::new(emit_expr(value)),
+                                        }),
+                                    ],
+                                })),
+                            })
+                        })
+                        .collect(),
+                })],
+            ),
+        },
     }
 }
 
@@ -341,6 +404,13 @@ pub fn emit_stmt(stmt: &IrStmt) -> Stmt {
         }
         IrStmt::Assign { target, value, .. } => match target {
             IrTarget::Var(name) => assign_stmt(name, emit_expr(value)),
+            IrTarget::Index { obj, key } => Stmt::Expr(ExprStmt {
+                span: DUMMY_SP,
+                expr: Box::new(helper_call(
+                    "luaSet",
+                    vec![emit_expr(obj), emit_expr(key), emit_expr(value)],
+                )),
+            }),
         },
         IrStmt::Expr { expr, .. } => Stmt::Expr(ExprStmt {
             span: DUMMY_SP,

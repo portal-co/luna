@@ -5,7 +5,7 @@
 
 mod harness;
 
-use looney::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp, Span, validate};
+use looney::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTable, IrTarget, IrUnOp, Span, validate};
 use looney::{js2lua, lua2js};
 
 fn sample_expr(expr: &IrExpr) -> IrExpr {
@@ -74,6 +74,19 @@ fn expr_samples() -> Vec<IrExpr> {
         }],
         span,
     });
+    out.push(IrExpr::Index {
+        obj: Box::new(IrExpr::Var("obj".into())),
+        key: Box::new(IrExpr::Str("key".into())),
+        span,
+    });
+    out.push(IrExpr::Table {
+        fields: IrTable::Array(vec![IrExpr::Num(1.0), IrExpr::Nil]),
+        span,
+    });
+    out.push(IrExpr::Table {
+        fields: IrTable::Record(vec![(IrExpr::Str("key".into()), IrExpr::Bool(true))]),
+        span,
+    });
     out
 }
 
@@ -93,6 +106,14 @@ fn stmt_samples() -> Vec<IrStmt> {
         IrStmt::Assign {
             target: IrTarget::Var("x".into()),
             value: IrExpr::Bool(false),
+            span,
+        },
+        IrStmt::Assign {
+            target: IrTarget::Index {
+                obj: IrExpr::Var("obj".into()),
+                key: IrExpr::Str("key".into()),
+            },
+            value: IrExpr::Num(2.0),
             span,
         },
         IrStmt::Expr {

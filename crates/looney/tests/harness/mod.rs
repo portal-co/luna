@@ -77,8 +77,6 @@ Object.assign(globalThis, L);
 globalThis.assert = L.luaAssert;
 "#;
 
-
-
 /// Prelude for reference runs of JS corpus cases: minimal `assert` shim
 /// (node has no global assert), leaving everything else stock.
 const JS_REFERENCE_PRELUDE: &str = r#"globalThis.assert = (v, msg) => {

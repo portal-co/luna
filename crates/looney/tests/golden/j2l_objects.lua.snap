@@ -1,0 +1,16 @@
+local key = "score"
+local obj = jsObjectRecord({{"value", 3}, {"nullValue", nil}, {key, 7}, {1, "one"}, {"add", function(self, x)
+  if self == nil then self = jsUndefined end
+  if x == nil then x = jsUndefined end
+  return jsAdd(jsGet(self, "value"), x)
+end}})
+local alias = obj
+jsSet(obj, "value", 4)
+local nested = jsObjectRecord({{"inner", obj}})
+jsSet(jsGet(nested, "inner"), "value", 6)
+local arr = jsArray({{0, 1}, {1, 2}, {2, nil}})
+jsSet(arr, 1, 3)
+jsLog(jsGet(alias, "add")(alias, 5))
+jsLog(jsGet(obj, key), jsGet(obj, 1), jsStrictEq(jsGet(obj, "nullValue"), nil), jsLen(arr), jsGet(arr, 0), jsStrictEq(jsGet(arr, 2), nil))
+jsLog(jsStrictEq(jsGet(obj, "missing"), jsUndefined), jsTypeof(jsGet(obj, "missing")))
+jsLog("ok")

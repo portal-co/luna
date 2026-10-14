@@ -4,7 +4,7 @@
 //! JS semantics into js.lua runtime helper calls (`jsAdd`, `jsTruthy`, ...).
 
 use crate::error::CompileError;
-use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp};
+use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTable, IrTarget, IrUnOp};
 
 fn bin_helper(op: IrBinOp) -> &'static str {
     match op {
@@ -76,6 +76,8 @@ fn is_atom(expr: &IrExpr) -> bool {
             | IrExpr::Var(_)
             | IrExpr::Call { .. }
             | IrExpr::Function { .. } // multi-line, self-contained
+            | IrExpr::Index { .. } // emits jsGet(...), call-shaped
+            | IrExpr::Table { .. } // emits {...}, self-delimiting
     )
 }
 
@@ -178,7 +180,9 @@ fn emit_expr_ctx(expr: &IrExpr, indent: usize, at_line_start: bool, out: &mut St
                 out.push(')');
             }
         },
-        IrExpr::Cond { cond, then, else_, .. } => {
+        IrExpr::Cond {
+            cond, then, else_, ..
+        } => {
             out.push_str("jsCond(");
             emit_expr_ctx(cond, indent, false, out);
             out.push_str(", function() return ");
@@ -190,6 +194,45 @@ fn emit_expr_ctx(expr: &IrExpr, indent: usize, at_line_start: bool, out: &mut St
         IrExpr::Function { params, body, .. } => {
             emit_function(params, body, indent, out);
         }
+        IrExpr::Index { obj, key, .. } => {
+            out.push_str("jsGet(");
+            emit_expr_ctx(obj, indent, false, out);
+            out.push_str(", ");
+            emit_expr_ctx(key, indent, false, out);
+            out.push(')');
+        }
+        IrExpr::Table { fields, .. } => match fields {
+            // JS array literals use 0-based keys. Route construction through
+            // jsArray so null-valued elements remain distinguishable from
+            // missing properties (Lua tables cannot store nil directly).
+            IrTable::Array(items) => {
+                out.push_str("jsArray({");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&format!("{{{i}, "));
+                    emit_expr_ctx(item, indent, false, out);
+                    out.push('}');
+                }
+                out.push_str("})");
+            }
+            // JS object literal: explicit keys, evaluated left to right.
+            IrTable::Record(pairs) => {
+                out.push_str("jsObjectRecord({");
+                for (i, (key, value)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push('{');
+                    emit_expr_ctx(key, indent, false, out);
+                    out.push_str(", ");
+                    emit_expr_ctx(value, indent, false, out);
+                    out.push('}');
+                }
+                out.push_str("})");
+            }
+        },
     }
 }
 
@@ -259,10 +302,21 @@ fn emit_stmt(stmt: &IrStmt, indent: usize, out: &mut String) {
         IrStmt::Assign { target, value, .. } => {
             out.push_str(&pad);
             match target {
-                IrTarget::Var(name) => out.push_str(name),
+                IrTarget::Var(name) => {
+                    out.push_str(name);
+                    out.push_str(" = ");
+                    emit_expr_ctx(value, indent, false, out);
+                }
+                IrTarget::Index { obj, key } => {
+                    out.push_str("jsSet(");
+                    emit_expr_ctx(obj, indent, false, out);
+                    out.push_str(", ");
+                    emit_expr_ctx(key, indent, false, out);
+                    out.push_str(", ");
+                    emit_expr_ctx(value, indent, false, out);
+                    out.push(')');
+                }
             }
-            out.push_str(" = ");
-            emit_expr_ctx(value, indent, false, out);
             out.push('\n');
         }
         IrStmt::Expr { expr, .. } => {

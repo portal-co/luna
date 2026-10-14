@@ -1,0 +1,57 @@
+let key = "computed";
+let t = luaTableRecord([
+    [
+        1,
+        10
+    ],
+    [
+        2,
+        20
+    ],
+    [
+        "label",
+        "ok"
+    ],
+    [
+        key,
+        4
+    ]
+]);
+let alias = t;
+let nested = luaTableRecord([
+    [
+        "inner",
+        t
+    ]
+]);
+luaSet(t, 1, luaAdd(luaGet(t, 1), 5));
+luaSet(luaGet(nested, "inner"), 2, 25);
+luaCall(assert, [
+    luaEq(luaGet(alias, 1), 15)
+]);
+luaCall(assert, [
+    luaEq(luaGet(alias, 2), 25)
+]);
+luaCall(assert, [
+    luaEq(luaGet(t, "label"), "ok")
+]);
+luaCall(assert, [
+    luaEq(luaGet(t, key), 4)
+]);
+luaSet(t, "label", null);
+luaCall(assert, [
+    luaEq(luaGet(t, "label"), null)
+]);
+luaSet(t, "label", "ok");
+luaCall(assert, [
+    luaEq(luaLen(t), 2)
+]);
+luaCall(print, [
+    luaGet(t, 1),
+    luaGet(t, "label"),
+    luaGet(t, key),
+    luaLen(t)
+]);
+luaCall(print, [
+    "ok"
+]);

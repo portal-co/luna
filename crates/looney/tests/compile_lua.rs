@@ -27,15 +27,26 @@ fn golden_functions() {
 }
 
 #[test]
+fn golden_tables_and_methods() {
+    for (source, golden) in [
+        ("tables.lua", "l2j_tables.js.snap"),
+        ("methods.lua", "l2j_methods.js.snap"),
+    ] {
+        let path = format!("tests/cases_l2j/{source}");
+        let source = std::fs::read_to_string(harness::manifest_rel(&path)).unwrap();
+        let emitted = looney::compile_lua_to_js(&source).unwrap();
+        harness::check_golden(golden, &emitted);
+    }
+}
+
+#[test]
 fn rejects_out_of_subset_constructs_with_positioned_errors() {
     let cases: &[&str] = &[
-        "x.y = 1",                     // index assignment: Phase 3
         "local a, b = 1, 2",           // multiple assignment: Phase 4
         "function a.b.f() end",        // dotted function names: Phase 3
         "function a:m() end",          // method definitions: Phase 3
         "for k in pairs({}) do end",   // generic for: Phase 5
         "repeat until true",           // repeat: out of subset v0
-        "local t = {}",                // tables: Phase 3
         "print(...)",                  // varargs: Phase 4
         "local x = a % 2 goto done",   // goto: out of subset v0
         "local f = function(...) end", // vararg params: Phase 4

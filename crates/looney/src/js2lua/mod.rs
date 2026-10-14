@@ -21,7 +21,7 @@
 pub mod emit;
 
 use crate::error::CompileError;
-use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTarget, IrUnOp, Span};
+use crate::ir::{IrBinOp, IrChunk, IrExpr, IrStmt, IrTable, IrTarget, IrUnOp, Span};
 use std::collections::HashSet;
 use swc_common::{FileName, GLOBALS, SourceMap, Span as SwcSpan, Spanned, sync::Lrc};
 use swc_ecma_ast::*;
@@ -36,10 +36,38 @@ const LUA_KEYWORDS: &[&str] = &[
 
 /// Names injected by the js.lua runtime (helpers, sentinels, stdlib shims).
 const LUA_RUNTIME_NAMES: &[&str] = &[
-    "console", "jsAdd", "jsAnd", "jsArith", "jsConcat", "jsCond", "jsDiv", "jsGe", "jsGet",
-    "jsGt", "jsInfinity", "jsLe", "jsLen", "jsLog", "jsLt", "jsMul", "jsNaN", "jsNeg", "jsNot",
-    "jsOr", "jsPow", "jsRem", "jsSet", "jsStrictEq", "jsSub", "jsToNumber", "jsToString",
-    "jsTruthy", "jsTypeof", "jsUndefined",
+    "console",
+    "jsAdd",
+    "jsAnd",
+    "jsArray",
+    "jsArith",
+    "jsConcat",
+    "jsCond",
+    "jsDiv",
+    "jsGe",
+    "jsGet",
+    "jsGt",
+    "jsInfinity",
+    "jsLe",
+    "jsLen",
+    "jsLog",
+    "jsLt",
+    "jsMul",
+    "jsNaN",
+    "jsNeg",
+    "jsNot",
+    "jsObjectRecord",
+    "jsOr",
+    "jsPow",
+    "jsRem",
+    "jsSet",
+    "jsStrictEq",
+    "jsSub",
+    "jsToNumber",
+    "jsToString",
+    "jsTruthy",
+    "jsTypeof",
+    "jsUndefined",
 ];
 
 fn runtime_like(name: &str) -> bool {
@@ -275,11 +303,7 @@ impl Lower {
         let (params, body) = self.lower_function(None, &decl.function.params, body)?;
         Ok(IrStmt::Assign {
             target: IrTarget::Var(name),
-            value: IrExpr::Function {
-                params,
-                body,
-                span,
-            },
+            value: IrExpr::Function { params, body, span },
             span,
         })
     }
@@ -294,10 +318,7 @@ impl Lower {
                 "this `for` shape (subset: `for (let i = e1; i <= e2; i++/i += e3)` and mirrors)",
             )
         };
-        let init = for_stmt
-            .init
-            .as_ref()
-            .ok_or_else(|| shape_err(self))?;
+        let init = for_stmt.init.as_ref().ok_or_else(|| shape_err(self))?;
         let VarDeclOrExpr::VarDecl(decl) = init else {
             return Err(shape_err(self));
         };
@@ -409,6 +430,44 @@ impl Lower {
         })
     }
 
+    /// Lower a property name to the key expression used by the runtime.
+    fn lower_prop_name(&mut self, prop: &PropName) -> Result<IrExpr, CompileError> {
+        match prop {
+            PropName::Ident(name) => Ok(IrExpr::Str(name.sym.to_string())),
+            PropName::Str(value) => Ok(IrExpr::Str(value.value.to_string_lossy().into_owned())),
+            PropName::Num(value) => Ok(IrExpr::Num(value.value)),
+            PropName::Computed(value) => self.lower_expr(&value.expr),
+            PropName::BigInt(value) => Err(self.unsupported(value.span, "bigint property names")),
+        }
+    }
+
+    fn lower_member(&mut self, member: &MemberExpr) -> Result<IrExpr, CompileError> {
+        let span = self.span_of(member.span);
+        let obj = self.lower_expr(&member.obj)?;
+        match &member.prop {
+            // `.length` is the one non-computed property with dedicated subset
+            // semantics; object properties literally named `length` are out.
+            MemberProp::Ident(name) if name.sym == "length" => Ok(IrExpr::Un {
+                op: IrUnOp::Len,
+                expr: Box::new(obj),
+                span,
+            }),
+            MemberProp::Ident(name) => Ok(IrExpr::Index {
+                obj: Box::new(obj),
+                key: Box::new(IrExpr::Str(name.sym.to_string())),
+                span,
+            }),
+            MemberProp::Computed(prop) => Ok(IrExpr::Index {
+                obj: Box::new(obj),
+                key: Box::new(self.lower_expr(&prop.expr)?),
+                span,
+            }),
+            MemberProp::PrivateName(name) => {
+                Err(self.unsupported(name.span, "private property access"))
+            }
+        }
+    }
+
     /// `x++` / `x--` as a statement, desugared to `x = x + 1` / `x = x - 1`.
     fn lower_update_stmt(&mut self, update: &UpdateExpr) -> Result<IrStmt, CompileError> {
         let span = self.span_of(update.span);
@@ -496,42 +555,52 @@ impl Lower {
                     });
                     Ok(())
                 }
-                Expr::Assign(assign) => {
-                    match assign.op {
-                        AssignOp::Assign => {
-                            let span = self.span_of(assign.span);
-                            let target = match &assign.left {
-                                AssignTarget::Simple(SimpleAssignTarget::Ident(binding)) => {
-                                    IrTarget::Var(self.resolve_name(&binding.id)?)
+                Expr::Assign(assign) => match assign.op {
+                    AssignOp::Assign => {
+                        let span = self.span_of(assign.span);
+                        let target = match &assign.left {
+                            AssignTarget::Simple(SimpleAssignTarget::Ident(binding)) => {
+                                IrTarget::Var(self.resolve_name(&binding.id)?)
+                            }
+                            AssignTarget::Simple(SimpleAssignTarget::Member(member)) => {
+                                let lowered = self.lower_member(member)?;
+                                let IrExpr::Index { obj, key, .. } = lowered else {
+                                    return Err(self.unsupported(
+                                        assign.span,
+                                        "assignment to `.length` is outside the subset",
+                                    ));
+                                };
+                                IrTarget::Index {
+                                    obj: *obj,
+                                    key: *key,
                                 }
-                                AssignTarget::Simple(_) => {
-                                    return Err(self
-                                        .unsupported(assign.span, "member assignment (Phase 3)"));
-                                }
-                                AssignTarget::Pat(_) => {
-                                    return Err(
-                                        self.unsupported(assign.span, "destructuring assignment")
-                                    );
-                                }
-                            };
-                            out.push(IrStmt::Assign {
-                                target,
-                                value: self.lower_expr(&assign.right)?,
-                                span,
-                            });
-                            Ok(())
-                        }
-                        AssignOp::AddAssign => {
-                            out.push(self.lower_compound_assign(assign, IrBinOp::Add)?);
-                            Ok(())
-                        }
-                        AssignOp::SubAssign => {
-                            out.push(self.lower_compound_assign(assign, IrBinOp::Sub)?);
-                            Ok(())
-                        }
-                        _ => Err(self.unsupported(assign.span, "this compound assignment")),
+                            }
+                            AssignTarget::Simple(_) => {
+                                return Err(self.unsupported(assign.span, "this assignment target"));
+                            }
+                            AssignTarget::Pat(_) => {
+                                return Err(
+                                    self.unsupported(assign.span, "destructuring assignment")
+                                );
+                            }
+                        };
+                        out.push(IrStmt::Assign {
+                            target,
+                            value: self.lower_expr(&assign.right)?,
+                            span,
+                        });
+                        Ok(())
                     }
-                }
+                    AssignOp::AddAssign => {
+                        out.push(self.lower_compound_assign(assign, IrBinOp::Add)?);
+                        Ok(())
+                    }
+                    AssignOp::SubAssign => {
+                        out.push(self.lower_compound_assign(assign, IrBinOp::Sub)?);
+                        Ok(())
+                    }
+                    _ => Err(self.unsupported(assign.span, "this compound assignment")),
+                },
                 Expr::Update(update) => {
                     out.push(self.lower_update_stmt(update)?);
                     Ok(())
@@ -608,21 +677,29 @@ impl Lower {
             }
             args.push(self.lower_expr(&arg.expr)?);
         }
-        // Stdlib shim: `console.log(...)` lowers to the js.lua `jsLog` entry.
-        if let Expr::Member(member) = &**callee {
-            if let (Expr::Ident(obj), MemberProp::Ident(prop)) = (&*member.obj, &member.prop)
-                && obj.sym.as_str() == "console"
-                && prop.sym.as_str() == "log"
-                && !self.is_local(&obj.to_id())
-            {
-                return Ok(IrExpr::Call {
-                    func: Box::new(IrExpr::Var("jsLog".into())),
-                    args,
-                    span,
-                });
-            }
-            return Err(self.unsupported(member.span, "method calls (Phase 3)"));
+        // `.length` is a value-only subset operator, not a callable member.
+        if let Expr::Member(member) = &**callee
+            && member.prop.is_ident_with("length")
+        {
+            return Err(self.unsupported(member.span, "calling `.length`"));
         }
+        // Stdlib shim: `console.log(...)` lowers to the js.lua `jsLog` entry.
+        if let Expr::Member(member) = &**callee
+            && let (Expr::Ident(obj), MemberProp::Ident(prop)) = (&*member.obj, &member.prop)
+            && obj.sym.as_str() == "console"
+            && prop.sym.as_str() == "log"
+            && !self.is_local(&obj.to_id())
+        {
+            return Ok(IrExpr::Call {
+                func: Box::new(IrExpr::Var("jsLog".into())),
+                args,
+                span,
+            });
+        }
+        // Ordinary member calls preserve the JS source shape in the IR:
+        // `obj.m(x)` is a call of the indexed function, with no implicit
+        // receiver argument. The v0 corpus writes an explicit `self` when a
+        // method needs one.
         let func = self.lower_expr(callee)?;
         Ok(IrExpr::Call {
             func: Box::new(func),
@@ -713,18 +790,16 @@ impl Lower {
             Expr::Fn(fn_expr) => {
                 let span = self.span_of(fn_expr.function.span);
                 if fn_expr.function.is_async || fn_expr.function.is_generator {
-                    return Err(self.unsupported(fn_expr.function.span, "async/generator functions"));
+                    return Err(
+                        self.unsupported(fn_expr.function.span, "async/generator functions")
+                    );
                 }
                 let body = fn_expr.function.body.as_ref().ok_or_else(|| {
                     self.unsupported(fn_expr.function.span, "bodyless function expression")
                 })?;
                 let (params, body) =
                     self.lower_function(fn_expr.ident.as_ref(), &fn_expr.function.params, body)?;
-                Ok(IrExpr::Function {
-                    params,
-                    body,
-                    span,
-                })
+                Ok(IrExpr::Function { params, body, span })
             }
             Expr::Arrow(arrow) => {
                 let span = self.span_of(arrow.span);
@@ -760,15 +835,64 @@ impl Lower {
                 self.in_function = prev_in_function;
                 self.scopes.pop();
                 let (params, body) = result?;
-                Ok(IrExpr::Function {
-                    params,
-                    body,
-                    span,
+                Ok(IrExpr::Function { params, body, span })
+            }
+            Expr::Member(member) => self.lower_member(member),
+            Expr::Object(object) => {
+                let mut pairs = Vec::new();
+                for prop in &object.props {
+                    match prop {
+                        PropOrSpread::Spread(spread) => {
+                            return Err(self.unsupported(spread.dot3_token, "object spread"));
+                        }
+                        PropOrSpread::Prop(prop) => match &**prop {
+                            Prop::KeyValue(pair) => pairs.push((
+                                self.lower_prop_name(&pair.key)?,
+                                self.lower_expr(&pair.value)?,
+                            )),
+                            Prop::Shorthand(id) => pairs.push((
+                                IrExpr::Str(id.sym.to_string()),
+                                IrExpr::Var(self.resolve_name(id)?),
+                            )),
+                            Prop::Assign(assign) => {
+                                return Err(
+                                    self.unsupported(assign.span, "object assignment properties")
+                                );
+                            }
+                            Prop::Getter(getter) => {
+                                return Err(self.unsupported(getter.span, "object getters"));
+                            }
+                            Prop::Setter(setter) => {
+                                return Err(self.unsupported(setter.span, "object setters"));
+                            }
+                            Prop::Method(method) => {
+                                return Err(
+                                    self.unsupported(method.function.span, "object methods")
+                                );
+                            }
+                        },
+                    }
+                }
+                Ok(IrExpr::Table {
+                    fields: IrTable::Record(pairs),
+                    span: self.span_of(object.span),
                 })
             }
-            Expr::Member(_) => Err(self.unsupported(expr.span(), "property access (Phase 3)")),
-            Expr::Object(_) | Expr::Array(_) => {
-                Err(self.unsupported(expr.span(), "object/array literals (Phase 3)"))
+            Expr::Array(array) => {
+                let mut items = Vec::new();
+                for element in &array.elems {
+                    let Some(element) = element else {
+                        return Err(self.unsupported(array.span, "array holes"));
+                    };
+                    if element.spread.is_some() {
+                        return Err(self.unsupported(array.span, "array spread"));
+                    }
+                    items.push(self.lower_expr(&element.expr)?);
+                }
+                Ok(IrExpr::Table {
+                    fields: IrTable::Array(items),
+                    span: self.span_of(array.span),
+                })
             }
             Expr::This(_) => Err(self.unsupported(expr.span(), "`this` (methods are Phase 3)")),
             Expr::Update(_) => Err(self.unsupported(

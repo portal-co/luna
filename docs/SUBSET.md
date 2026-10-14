@@ -17,12 +17,13 @@ Status legend: **[v0]** implemented now; **[P2]–[P6]** scheduled (PLAN.md);
 | boolean    | `true/false` | `true/false`  | `boolean` / `boolean`                   |
 | number     | `1`, `1.5`   | `1`, `1.5`    | f64 both sides (no integer subtype)     |
 | string     | `"s"`        | `"s"`         | `string` / `string`                     |
-| table/obj  | `{...}` [P3] | `{...}` [P3]  | `LuaTable` / `JSObject` wrapper         |
-| function   | [P2]         | [P2]          | host function values                    |
+| table/obj  | `{...}`       | `{...}`       | `LuaTable` / plain Lua table + JS key helpers |
+| function   | [v0]         | [v0]          | host function values                    |
 
-- Assigning `nil` to a table key **erases** it [P3].
+- Assigning `nil` to a Lua table key **erases** it.
 - `undefined` is distinct from `null`; reading a missing JS property yields
-  `undefined` (never nil-safe) [P3].
+  `undefined` (never nil-safe). JS object properties whose value is `null` stay
+  present through an internal runtime marker.
 - NaN: `NaN ~= NaN` / `NaN !== NaN` in both languages.
 
 ## 2. Lexical
@@ -85,10 +86,10 @@ both languages, and shadowing resolves identically.
 | comparison        | `== ~= < <= > >=` | `=== !== < <= > >=` | strict-only; helpers           |
 | logic             | `and or not` | `&& || !`     | thunked helpers; operand-value results     |
 | unary             | `- not #`  | `- !` (+ `typeof`) | `-` raw (numbers); `typeof` → helper   |
-| calls             | `f(a, b)`  | `f(a, b)`      | direct; multi-return rules [P4]            |
+| calls             | `f(a, b)`  | `f(a, b)`      | runtime call normalization; multi-return rules [P4] |
 | vararg/spread     | `...`      | `...rest`      | [P4]                                       |
-| index             | `t[k]`, `t.k` | `t[k]`, `t.k` | [P3]                                       |
-| constructors      | `{...}`    | `{...}`, `[...]` | [P3]                                     |
+| index             | `t[k]`, `t.k` | `t[k]`, `t.k` | [v0]                                       |
+| constructors      | `{...}`    | `{...}`, `[...]` | [v0]                                     |
 | functions         | [v0]*      | [v0]*          | fixed params, closures, recursion          |
 | bitwise ops       | —          | —              | [X] v0                                     |
 | loose eq (`==`)   | n/a        | —              | [X] (use `===`)                            |
@@ -139,8 +140,9 @@ parenthesized, and everything semantic goes through helper calls anyway.
   ToNumber (NaN → false). String comparison is byte/code-unit order (diverges
   from UTF-16 order only outside ASCII — corpus stays ASCII).
 - **Length `#`/`.length`**: strings (bytes / UTF-16 units — diverges only
-  outside ASCII); array-sequence border for tables [P3]. Holes are **undefined
-  behavior**; the corpus and fuzzer must not create them.
+  outside ASCII); array-sequence border for Lua tables and highest-index-plus-one
+  for JS-side arrays. Holes are **undefined behavior**; the corpus and fuzzer
+  must not create them.
 - **`typeof`/`type`**: JS spellings ("undefined","object","number","string",
   "boolean","function"); `typeof null === "object"`.
 
@@ -168,6 +170,21 @@ parenthesized, and everything semantic goes through helper calls anyway.
   `type`/`typeof`. Growth is by amendment to this document with matching
   runtime implementations on both sides.
 
-## 8. Change log
+## 8. Phase 3 table/call notes
+
+- Lua table constructors preserve left-to-right field evaluation. Pure positional
+  constructors use 1-based `LuaTable` keys; mixed/record constructors use
+  explicit key/value pairs, including synthesized positional keys.
+- JS arrays are represented by plain Lua tables with 0-based numeric keys and a
+  weak side registry; JS objects use string property keys. Missing properties
+  read as `jsUndefined`, while present `null` values use a private marker because
+  Lua tables cannot store nil.
+- Lua method calls use an explicit receiver. Stable variable receivers lower to
+  `obj["method"](obj, ...)`; computed receivers use `luaMethodCall` to avoid
+  evaluating the receiver twice. JS member calls do not add an implicit receiver.
+- lua2js calls route through `luaCall`, which converts a host `undefined` return
+  to Lua nil. js2lua's `jsLog` returns `jsUndefined` explicitly.
+
+## 9. Change log
 
 - v0 (initial): expression core (§4 [v0] rows), chunk statements, two runtimes.

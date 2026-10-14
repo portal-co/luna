@@ -1,4 +1,4 @@
-// lure — JS-side Lua runtime for lua2js output (Luna Subset v0, Phase 1
+// lure — JS-side Lua runtime for lua2js output (Luna Subset v0, Phase 3
 // surface). Compiled Lua chunks expect these helpers in scope as globals.
 // Canonical number formatting is JS-style (see docs/SUBSET.md §Numbers).
 export function luaKey(value) {
@@ -218,8 +218,25 @@ export function luaGe(a, b) {
     return luaLe(b, a);
 }
 // ---------------------------------------------------------------------------
-// Length / table access (table support is minimal until Phase 3)
+// Table construction / length / table access
 // ---------------------------------------------------------------------------
+// `luaTable([v1, v2, ...])` — array-style constructor, keys 1..=n (Lua base).
+export function luaTable(items = []) {
+    const contents = {};
+    items.forEach((item, i) => {
+        if (item !== null)
+            contents[i + 1] = item;
+    });
+    return new LuaTable(contents);
+}
+// `luaTableRecord([[k1, v1], [k2, v2], ...])` — record-style constructor with
+// arbitrary (already evaluated) keys.
+export function luaTableRecord(pairs) {
+    const table = new LuaTable();
+    for (const [key, value] of pairs)
+        luaSet(table, key, value);
+    return table;
+}
 export function luaLen(x) {
     if (typeof x === "string")
         return x.length;
@@ -265,6 +282,20 @@ export function luaSet(t, key, value) {
     else {
         t.contents[k] = value;
     }
+}
+// Calls go through one helper so a host JS `undefined` return (for example
+// `print`) is normalized to Lua nil. This also gives non-callable values a
+// Lua-shaped error instead of leaking a host TypeError.
+export function luaCall(func, args) {
+    if (typeof func !== "function") {
+        luaError(`attempt to call a ${luaTypeName(func)} value`);
+    }
+    const result = func(...args);
+    return result === undefined ? null : result;
+}
+// Lua method-call sugar passes the receiver as an explicit first argument.
+export function luaMethodCall(receiver, key, ...args) {
+    return luaCall(luaGet(receiver, key), [receiver, ...args]);
 }
 // ---------------------------------------------------------------------------
 // stdlib subset (seeded into globals by embedders / the test harness)

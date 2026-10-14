@@ -27,6 +27,14 @@ fn golden_functions() {
 }
 
 #[test]
+fn golden_objects() {
+    let source =
+        std::fs::read_to_string(harness::manifest_rel("tests/cases_j2l/objects.js")).unwrap();
+    let emitted = looney::compile_js_to_lua(&source).unwrap();
+    harness::check_golden("j2l_objects.lua.snap", &emitted);
+}
+
+#[test]
 fn golden_keeps_runtime_separate() {
     // The compiler output is just the chunk; the runtime ships separately.
     let emitted = looney::compile_js_to_lua("console.log(1);").unwrap();
@@ -37,28 +45,27 @@ fn golden_keeps_runtime_separate() {
 #[test]
 fn rejects_out_of_subset_constructs_with_positioned_errors() {
     let cases: &[&str] = &[
-        "let a = 1 == 1;",       // loose equality
-        "let a = 1 != 2;",       // loose inequality
-        "x.y;",                  // property access: Phase 3
-        "let o = {};",           // object literals: Phase 3
-        "let a = [];",           // array literals: Phase 3
-        "return 1;",             // top-level return (JS has none)
-        "for (;;) {}",           // non-numeric-for shape
+        "let a = 1 == 1;",                // loose equality
+        "let a = 1 != 2;",                // loose inequality
+        "return 1;",                      // top-level return (JS has none)
+        "for (;;) {}",                    // non-numeric-for shape
         "for (let i = 0; i < 3; i++) {}", // `<` is not the numeric-for shape
-        "let a = x ?? y;",       // nullish coalescing
-        "let a = `t`;",          // template literals
-        "let a$b = 1;",          // `$` in identifiers
-        "import x from 'y';",    // modules
-        "a *= 2;",               // unsupported compound assignment
-        "let b = a++;",          // update expressions in expression position
-        "let {a} = b;",          // destructuring
-        "async function f() {}", // async
-        "function* g() {}",      // generators
-        "let h = function* () {};", // generator expressions
-        "this.x = 1;",           // `this` (methods are Phase 3)
-        "let i = () => this;",   // `this` in arrows
-        "f(...args);",           // spread calls: Phase 4
-        "let j = (x) => arguments;", // `arguments`
+        "let a = x ?? y;",                // nullish coalescing
+        "let a = `t`;",                   // template literals
+        "let a$b = 1;",                   // `$` in identifiers
+        "import x from 'y';",             // modules
+        "a *= 2;",                        // unsupported compound assignment
+        "let b = a++;",                   // update expressions in expression position
+        "let {a} = b;",                   // destructuring
+        "async function f() {}",          // async
+        "function* g() {}",               // generators
+        "let h = function* () {};",       // generator expressions
+        "this.x = 1;",                    // `this` (methods are Phase 3)
+        "let i = () => this;",            // `this` in arrows
+        "f(...args);",                    // spread calls: Phase 4
+        "let o = {...x};",                // object spread: Phase 4
+        "let a = [...x];",                // array spread: Phase 4
+        "let j = (x) => arguments;",      // `arguments`
     ];
     for source in cases {
         match looney::compile_js_to_lua(source) {

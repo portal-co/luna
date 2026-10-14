@@ -1,0 +1,12 @@
+const key = "score";
+const obj = { value: 3, nullValue: null, [key]: 7, 1: "one", add: function (self, x) { return self.value + x; } };
+const alias = obj;
+obj.value = 4;
+const nested = { inner: obj };
+nested.inner.value = 6;
+const arr = [1, 2, null];
+arr[1] = 3;
+console.log(alias.add(alias, 5));
+console.log(obj[key], obj[1], obj.nullValue === null, arr.length, arr[0], arr[2] === null);
+console.log(obj.missing === undefined, typeof obj.missing);
+console.log("ok");

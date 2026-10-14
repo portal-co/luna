@@ -125,13 +125,39 @@ pub enum IrExpr {
         body: Vec<IrStmt>,
         span: Span,
     },
+    /// Table/object indexing: `t[k]` / `t.k` (lowering lowers the dot form to
+    /// a string key). Property semantics live in the direction-paired runtime
+    /// (`luaGet`/`jsGet`): Lua reads return nil for missing keys; JS reads
+    /// return the `undefined` sentinel.
+    Index {
+        obj: Box<IrExpr>,
+        key: Box<IrExpr>,
+        span: Span,
+    },
+    /// Table/object constructor. `Array(items)` maps to `{1=it, 2=it, ...}` /
+    /// a JS array literal; `Record` maps to record fields with explicit keys.
+    Table {
+        fields: IrTable,
+        span: Span,
+    },
+}
+
+/// Constructor payload for [`IrExpr::Table`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum IrTable {
+    /// Array-style: positional items, 1-based in Lua / 0-based in JS (the
+    /// direction-paired emitter picks the base).
+    Array(Vec<IrExpr>),
+    /// Record-style: explicit keys evaluated left to right.
+    Record(Vec<(IrExpr, IrExpr)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IrTarget {
     /// Assign to a (local or global) variable.
     Var(String),
-    // Phase 3: Index { obj: IrExpr, key: IrExpr }
+    /// Assign through an index: `t[k] = v` / `obj.key = v`.
+    Index { obj: IrExpr, key: IrExpr },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -231,7 +257,9 @@ fn validate_expr(expr: &IrExpr) -> Result<(), CompileError> {
             validate_expr(lhs)?;
             validate_expr(rhs)
         }
-        IrExpr::Cond { cond, then, else_, .. } => {
+        IrExpr::Cond {
+            cond, then, else_, ..
+        } => {
             validate_expr(cond)?;
             validate_expr(then)?;
             validate_expr(else_)
@@ -242,6 +270,25 @@ fn validate_expr(expr: &IrExpr) -> Result<(), CompileError> {
             }
             validate_stmts(body)
         }
+        IrExpr::Index { obj, key, .. } => {
+            validate_expr(obj)?;
+            validate_expr(key)
+        }
+        IrExpr::Table { fields, .. } => match fields {
+            IrTable::Array(items) => {
+                for item in items {
+                    validate_expr(item)?;
+                }
+                Ok(())
+            }
+            IrTable::Record(pairs) => {
+                for (key, value) in pairs {
+                    validate_expr(key)?;
+                    validate_expr(value)?;
+                }
+                Ok(())
+            }
+        },
     }
 }
 
@@ -257,6 +304,10 @@ fn validate_stmt(stmt: &IrStmt) -> Result<(), CompileError> {
         IrStmt::Assign { target, value, .. } => {
             match target {
                 IrTarget::Var(name) => check_ident(name)?,
+                IrTarget::Index { obj, key } => {
+                    validate_expr(obj)?;
+                    validate_expr(key)?;
+                }
             }
             validate_expr(value)
         }

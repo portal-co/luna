@@ -313,14 +313,17 @@ Shipped via `include_str!` and prepended to js2lua output unless `--no-runtime`.
   - Harness runs compiled JS in CJS sloppy mode (classic-script semantics:
     chunk `return` legal, implicit globals work).
 
-### Phase 3 — Tables/objects & calls
-- [ ] Table/object literals (array + record + mixed), indexing (incl. string keys,
+### Phase 3 — Tables/objects & calls ✅
+- [x] Table/object literals (array + record + mixed), indexing (incl. string keys,
   numeric keys, computed), assignment through index, `#`/`.length`.
-- [ ] Method calls via explicit-receiver lowering; argument truncation/fill-nil.
-- [ ] `lure`: `LuaTable` contents access honoring the `lua$` key scheme + numeric keys;
-  `js.lua`: `JSObject`/`JSArray` wrappers.
-- Done when: matrix/record/nested-table corpus passes; aliasing tests (shared table
+- [x] Method calls via explicit-receiver lowering; argument truncation/fill-nil.
+- [x] `lure`: `LuaTable` contents access honoring the `lua$` key scheme + numeric keys;
+  `js.lua`: plain Lua-table JS objects/arrays with key normalization and null markers.
+- Done: matrix/record/nested-table corpus passes; aliasing tests (shared table
   mutation visible across variables) pass both directions.
+- Landed (2026-10-14): tables/objects, computed and nested indexing, aliasing,
+  length, explicit-receiver Lua methods, JS member calls, and normalized call
+  helpers are covered by the behavioral matrix and goldens.
 
 ### Phase 4 — Varargs, multi-return, multiple assignment
 - [ ] `...` ↔ `...rest`, `LuaMulti` sentinel + expansion rules (only in tail position).
@@ -385,3 +388,9 @@ Shipped via `include_str!` and prepended to js2lua output unless `--no-runtime`.
   (needed for JS parity); `function name()` global-fn sugar included; harness
   switched from ESM+IIFE to CJS sloppy-mode execution so chunk-level `return`
   and global assignment both behave like Lua chunks.
+- 2026-10-14: Phase 3 landed. Deviations: JS objects and arrays use plain Lua
+  tables plus a weak array registry rather than wrapper classes; an internal
+  null marker preserves present JS `null` properties because Lua cannot store
+  nil. lua2js routes calls through `luaCall` to normalize host `undefined`, and
+  uses `luaMethodCall` only for computed Lua receivers so stable receiver calls
+  retain the explicit-receiver IR shape.

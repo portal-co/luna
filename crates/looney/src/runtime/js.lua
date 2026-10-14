@@ -1,5 +1,5 @@
 -- js.lua — Lua-side JavaScript runtime for js2lua output (Luna Subset v0,
--- Phase 1 surface). Prepended to (or preloaded before) compiled JS chunks.
+-- Phase 3 surface). Prepended to (or preloaded before) compiled JS chunks.
 -- Canonical number formatting is JS-style (see docs/SUBSET.md §Numbers).
 
 -- `undefined` cannot be `nil` (nil is taken by `null`, and Lua tables cannot
@@ -11,6 +11,12 @@ jsUndefined = setmetatable({}, {
 })
 jsNaN = 0 / 0
 jsInfinity = math.huge
+
+-- Lua cannot store nil in a table. Keep an internal marker for a present JS
+-- property whose value is JavaScript null, and track arrays so numeric indexes
+-- remain numeric while object keys follow JavaScript's property-key rules.
+local jsNull = {}
+local jsArrays = setmetatable({}, { __mode = "k" })
 
 local function isNaN(x)
   return type(x) == "number" and x ~= x
@@ -137,6 +143,15 @@ function jsNeg(x) return -jsToNumber(x) end
 
 function jsLen(x)
   if type(x) == "string" then return #x end
+  if type(x) == "table" then
+    -- JS arrays are stored 0-based in a plain Lua table; length is one past
+    -- the highest non-negative integer key (JS `length` semantics).
+    local max = -1
+    for k in pairs(x) do
+      if type(k) == "number" and k > max and k % 1 == 0 then max = k end
+    end
+    return max + 1
+  end
   error("jsLen: unsupported value of type " .. type(x), 2)
 end
 
@@ -165,14 +180,39 @@ function jsCond(c, a, b)
   if jsTruthy(c) then return a() else return b() end
 end
 
+-- Property keys for JS objects are strings. Arrays retain integer keys so
+-- `arr[0]` and `arr.length` behave naturally in the Lua representation.
+local function jsPropertyKey(k)
+  if k == nil then return "null" end
+  if rawequal(k, jsUndefined) then return "undefined" end
+  if type(k) == "string" then return k end
+  if type(k) == "number" then return jsNumToStr(k) end
+  return jsToString(k)
+end
+
+local function jsStorageKey(t, k)
+  if jsArrays[t] then
+    if type(k) == "number" then return k end
+    if type(k) == "string" then
+      local n = tonumber(k)
+      if n ~= nil and jsNumToStr(n) == k then return n end
+      return k
+    end
+    return jsPropertyKey(k)
+  end
+  return jsPropertyKey(k)
+end
+
 -- Minimal property access (plain-table objects; prototype machinery is
--- Phase 3/5). Missing keys read as `undefined`, never nil.
+-- Phase 5). Missing keys read as `undefined`, never nil. Present null values
+-- are decoded from the private marker.
 function jsGet(t, k)
   if type(t) ~= "table" then
     error("jsGet: cannot index " .. jsTypeof(t), 2)
   end
-  local v = rawget(t, k)
+  local v = rawget(t, jsStorageKey(t, k))
   if v == nil then return jsUndefined end
+  if rawequal(v, jsNull) then return nil end
   return v
 end
 
@@ -180,8 +220,27 @@ function jsSet(t, k, v)
   if type(t) ~= "table" then
     error("jsSet: cannot index " .. jsTypeof(t), 2)
   end
-  rawset(t, k, v)
+  rawset(t, jsStorageKey(t, k), v == nil and jsNull or v)
   return v
+end
+
+-- Constructors keep null-valued properties present even though Lua tables
+-- cannot store nil. Their pair-list input also preserves evaluation order.
+function jsArray(pairs)
+  local array = {}
+  jsArrays[array] = true
+  for _, pair in ipairs(pairs) do
+    jsSet(array, pair[1], pair[2])
+  end
+  return array
+end
+
+function jsObjectRecord(pairs)
+  local object = {}
+  for _, pair in ipairs(pairs) do
+    jsSet(object, pair[1], pair[2])
+  end
+  return object
 end
 
 -- console.log shim: space-joined JS ToString of each argument.
@@ -191,6 +250,7 @@ function jsLog(...)
     parts[i] = jsToString(select(i, ...))
   end
   print(table.concat(parts, " "))
+  return jsUndefined
 end
 
 console = { log = jsLog }

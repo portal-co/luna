@@ -13,7 +13,7 @@ export declare class LuaTable {
     constructor(contents?: LuaTableContents);
     get contents(): LuaTableContents;
 }
-export type LuaObject = LuaTable | number | string | boolean | ((...args: LuaObject[]) => LuaObject[]) | null;
+export type LuaObject = LuaTable | number | string | boolean | ((...args: LuaObject[]) => LuaObject | undefined) | null;
 export declare function luaTruthy(x: LuaObject): boolean;
 export declare function luaNot(x: LuaObject): boolean;
 export declare function luaAnd(a: () => LuaObject, b: () => LuaObject): LuaObject;
@@ -35,9 +35,13 @@ export declare function luaLt(a: LuaObject, b: LuaObject): boolean;
 export declare function luaLe(a: LuaObject, b: LuaObject): boolean;
 export declare function luaGt(a: LuaObject, b: LuaObject): boolean;
 export declare function luaGe(a: LuaObject, b: LuaObject): boolean;
+export declare function luaTable(items?: LuaObject[]): LuaTable;
+export declare function luaTableRecord(pairs: [LuaObject, LuaObject][]): LuaTable;
 export declare function luaLen(x: LuaObject): number;
 export declare function luaGet(t: LuaObject, key: LuaObject): LuaObject;
 export declare function luaSet(t: LuaObject, key: LuaObject, value: LuaObject): void;
+export declare function luaCall(func: LuaObject, args: LuaObject[]): LuaObject;
+export declare function luaMethodCall(receiver: LuaObject, key: LuaObject, ...args: LuaObject[]): LuaObject;
 export declare function print(...args: LuaObject[]): void;
 export declare function luaAssert(v: LuaObject, message?: LuaObject): LuaObject;
 export declare function tostring(x: LuaObject): string;

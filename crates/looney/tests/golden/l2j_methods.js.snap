@@ -1,0 +1,45 @@
+let obj = luaTableRecord([
+    [
+        "value",
+        3
+    ],
+    [
+        "add",
+        function(self, x) {
+            self = self === void 0 ? null : self;
+            x = x === void 0 ? null : x;
+            return luaAdd(luaGet(self, "value"), x);
+        }
+    ]
+]);
+luaCall(assert, [
+    luaEq(luaCall(luaGet(obj, "add"), [
+        obj,
+        4
+    ]), 7)
+]);
+let calls = 0;
+let make = function make() {
+    calls = luaAdd(calls, 1);
+    return obj;
+};
+luaCall(assert, [
+    luaEq(luaCall(luaMethodCall, [
+        luaCall(make, []),
+        "add",
+        1
+    ]), 4)
+]);
+luaCall(assert, [
+    luaEq(calls, 1)
+]);
+luaSet(obj, "value", 5);
+luaCall(print, [
+    luaCall(luaGet(obj, "add"), [
+        obj,
+        2
+    ])
+]);
+luaCall(print, [
+    "ok"
+]);
