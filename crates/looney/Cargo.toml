@@ -11,5 +11,10 @@ portal-solutions-swibb.workspace = true
 swc_atoms.workspace = true
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
+swc_ecma_codegen.workspace = true
+swc_ecma_parser.workspace = true
 swc_ecma_utils.workspace = true
 swc_ecma_visit.workspace = true
+
+[dev-dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored"] }

@@ -1,0 +1,11 @@
+assert((0 && 1) === 0);
+assert((0 || 1) === 1);
+assert(("" && 1) === "");
+assert(("" || "d") === "d");
+assert((null && 1) === null);
+assert((undefined || 2) === 2);
+assert(!"" === true);
+assert(!0 === true);
+assert(!"x" === false);
+assert(!NaN === true);
+console.log("ok");

@@ -1,0 +1,11 @@
+let a = 1 + 2 * 3;
+assert(a === 7);
+let b = 10 / 4;
+assert(b === 2.5);
+let c = 2 ** 10;
+assert(c === 1024);
+assert(-7 % 2 === -1);
+assert(7 % -2 === 1);
+assert(1e3 === 1000);
+assert(0x10 === 16);
+console.log("ok");

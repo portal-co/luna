@@ -1,0 +1,14 @@
+let a = luaAdd(1, luaMul(2, 3));
+assert(luaEq(a, 7));
+let b = luaDiv(10, 4);
+assert(luaEq(b, 2.5));
+let c = luaPow(2, 10);
+assert(luaEq(c, 1024));
+assert(luaEq(luaMod(-7, 3), 2));
+assert(luaEq(luaMod(7, -3), -2));
+assert(luaEq(-luaPow(2, 2), -4));
+assert(luaEq(luaPow(2, luaPow(2, 3)), 256));
+assert(luaEq(1000, 1000));
+assert(luaEq(16, 16));
+assert(luaGt(luaDiv(1, 0), 1e+308));
+print("ok");
